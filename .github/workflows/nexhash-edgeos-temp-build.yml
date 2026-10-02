@@ -54,7 +54,10 @@ jobs:
           test -s out/NexHash-EdgeOS-1.1-Industrial-amd64.iso
           test -s out/NexHash-EdgeOS-1.1-Industrial-amd64.iso.sha256
           test -s out/BUILD-VALIDATED.txt
-          sha256sum -c out/NexHash-EdgeOS-1.1-Industrial-amd64.iso.sha256
+          expected="$(awk '{print $1}' out/NexHash-EdgeOS-1.1-Industrial-amd64.iso.sha256)"
+          actual="$(sha256sum out/NexHash-EdgeOS-1.1-Industrial-amd64.iso | awk '{print $1}')"
+          test "$actual" = "$expected"
+          printf '%s  %s\n' "$actual" "NexHash-EdgeOS-1.1-Industrial-amd64.iso" > out/NexHash-EdgeOS-1.1-Industrial-amd64.iso.sha256
           cat out/BUILD-VALIDATED.txt
           cat out/NexHash-EdgeOS-1.1-Industrial-amd64.iso.sha256
           ls -lh out/NexHash-EdgeOS-1.1-Industrial-amd64.iso
