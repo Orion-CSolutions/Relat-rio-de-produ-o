@@ -1,0 +1,66 @@
+name: TEMP Build NexHash EdgeOS ISO
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/nexhash-edgeos-temp-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout isolated NexHash build branch
+        uses: actions/checkout@v4
+        with:
+          ref: nexhash-edgeos-iso-build
+
+      - name: Reassemble build script
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat nexhash-edgeos-build/build.part-* | tr -d '\r\n' | base64 -d > /tmp/nexhash-build.sh
+          chmod +x /tmp/nexhash-build.sh
+          bash -n /tmp/nexhash-build.sh
+          test "$(wc -c < /tmp/nexhash-build.sh)" -eq 28830
+          echo "build script sha256:"
+          sha256sum /tmp/nexhash-build.sh
+
+      - name: Build ISO in Debian 13
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --privileged             -v "$PWD:/work"             -v /tmp/nexhash-build.sh:/nexhash-build.sh:ro             -w /work             debian:13             bash -lc 'chmod +x /nexhash-build.sh && /nexhash-build.sh'
+
+      - name: Verify deliverables
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s out/NexHash-EdgeOS-1.1-Industrial-amd64.iso
+          test -s out/NexHash-EdgeOS-1.1-Industrial-amd64.iso.sha256
+          test -s out/BUILD-VALIDATED.txt
+          sha256sum -c out/NexHash-EdgeOS-1.1-Industrial-amd64.iso.sha256
+          cat out/BUILD-VALIDATED.txt
+          cat out/NexHash-EdgeOS-1.1-Industrial-amd64.iso.sha256
+          ls -lh out/NexHash-EdgeOS-1.1-Industrial-amd64.iso
+
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-EdgeOS-1.1-Industrial-amd64
+          path: |
+            out/NexHash-EdgeOS-1.1-Industrial-amd64.iso
+            out/NexHash-EdgeOS-1.1-Industrial-amd64.iso.sha256
+            out/BUILD-VALIDATED.txt
+            out/boot-report.txt
+            out/iso-file.txt
+            out/qemu-bios.log
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
