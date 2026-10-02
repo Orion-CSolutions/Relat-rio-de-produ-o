@@ -6,6 +6,10 @@ on:
       - main
     paths:
       - '.github/workflows/nexhash-edgeos-temp-build.yml'
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 permissions:
@@ -36,7 +40,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker run --rm --privileged             -v "$PWD:/work"             -v /tmp/nexhash-build.sh:/nexhash-build.sh:ro             -w /work             debian:13             bash -lc 'chmod +x /nexhash-build.sh && /nexhash-build.sh'
+          docker run --rm --privileged \
+            -v "$PWD:/work" \
+            -v /tmp/nexhash-build.sh:/nexhash-build.sh:ro \
+            -w /work \
+            debian:13 \
+            bash -lc 'chmod +x /nexhash-build.sh && /nexhash-build.sh'
 
       - name: Verify deliverables
         shell: bash
