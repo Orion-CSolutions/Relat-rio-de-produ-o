@@ -45,7 +45,7 @@ jobs:
             -v /tmp/nexhash-build.sh:/nexhash-build.sh:ro \
             -w /work \
             debian:13 \
-            bash -lc 'chmod +x /nexhash-build.sh && /nexhash-build.sh'
+            bash -lc '/nexhash-build.sh'
 
       - name: Verify deliverables
         shell: bash
