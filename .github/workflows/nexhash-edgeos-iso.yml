@@ -1,0 +1,59 @@
+name: Build NexHash EdgeOS ISO
+
+on:
+  push:
+    branches:
+      - nexhash-edgeos-iso-build
+    paths:
+      - '.github/workflows/nexhash-edgeos-iso.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout build branch
+        uses: actions/checkout@v4
+
+      - name: Reassemble verified build script
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat nexhash-edgeos-build/build.part-* | tr -d '\r\n' | base64 -d > /tmp/nexhash-build.sh
+          chmod +x /tmp/nexhash-build.sh
+          bash -n /tmp/nexhash-build.sh
+          sha256sum /tmp/nexhash-build.sh
+          wc -c /tmp/nexhash-build.sh
+
+      - name: Build NexHash EdgeOS inside Debian 13
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --privileged             -v "$PWD:/work"             -v /tmp/nexhash-build.sh:/nexhash-build.sh:ro             -w /work             debian:13             bash -lc 'chmod +x /nexhash-build.sh && /nexhash-build.sh'
+
+      - name: Show validation output
+        if: always()
+        shell: bash
+        run: |
+          find out -maxdepth 1 -type f -printf '%f %s bytes\n' 2>/dev/null || true
+          cat out/BUILD-VALIDATED.txt 2>/dev/null || true
+          cat out/NexHash-EdgeOS-1.1-Industrial-amd64.iso.sha256 2>/dev/null || true
+
+      - name: Upload NexHash EdgeOS ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-EdgeOS-1.1-Industrial-amd64
+          path: |
+            out/NexHash-EdgeOS-1.1-Industrial-amd64.iso
+            out/NexHash-EdgeOS-1.1-Industrial-amd64.iso.sha256
+            out/BUILD-VALIDATED.txt
+            out/boot-report.txt
+            out/iso-file.txt
+            out/qemu-bios.log
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
