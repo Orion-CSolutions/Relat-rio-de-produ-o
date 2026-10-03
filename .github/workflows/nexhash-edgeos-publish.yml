@@ -20,13 +20,13 @@ jobs:
       TAG: "nexhash-edgeos-v1.1.0-industrial"
       ISO: "NexHash-EdgeOS-1.1-Industrial-amd64.iso"
     steps:
-      - name: Download validated build artifact
+      - name: Download and verify validated ISO
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p release
+          mkdir -p release parts
           curl -fL --retry 3 --retry-delay 3 \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -34,47 +34,60 @@ jobs:
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" \
             -o /tmp/nexhash-artifact.zip
           unzip -j /tmp/nexhash-artifact.zip \
-            "${ISO}" \
-            "${ISO}.sha256" \
-            "BUILD-VALIDATED.txt" \
-            "boot-report.txt" \
-            "iso-file.txt" \
+            "${ISO}" "${ISO}.sha256" "BUILD-VALIDATED.txt" "boot-report.txt" "iso-file.txt" \
             -d release
-          test -s "release/${ISO}"
-          test -s "release/${ISO}.sha256"
-          test -s "release/BUILD-VALIDATED.txt"
           cd release
           sha256sum -c "${ISO}.sha256"
           grep -qi "validated" BUILD-VALIDATED.txt
           grep -Eqi "BIOS|UEFI|El Torito" boot-report.txt
-          file "${ISO}"
-          ls -lh "${ISO}"
+          cd ..
+          split -b 700M -d -a 2 "release/${ISO}" "parts/${ISO}.part"
+          test "$(find parts -type f | wc -l)" -eq 3
+          cat > parts/REASSEMBLE-NEXHASH.cmd <<'CMD'
+@echo off
+setlocal
+set ISO=NexHash-EdgeOS-1.1-Industrial-amd64.iso
+echo Recriando %ISO%...
+copy /b "%ISO%.part00"+"%ISO%.part01"+"%ISO%.part02" "%ISO%"
+if errorlevel 1 (
+  echo ERRO ao recriar a ISO.
+  pause
+  exit /b 1
+)
+echo.
+echo SHA-256 esperado:
+type "%ISO%.sha256"
+echo.
+echo SHA-256 calculado:
+certutil -hashfile "%ISO%" SHA256
+echo.
+echo ISO pronta. Agora selecione este arquivo no Rufus.
+pause
+CMD
+          cp "release/${ISO}.sha256" parts/
+          cp release/BUILD-VALIDATED.txt parts/
+          ls -lh parts/
 
-      - name: Publish direct ISO download
+      - name: Publish split download
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload "${TAG}" \
-              "release/${ISO}" \
-              "release/${ISO}.sha256" \
-              "release/BUILD-VALIDATED.txt" \
-              "release/boot-report.txt" \
-              "release/iso-file.txt" \
-              --clobber --repo "${GITHUB_REPOSITORY}"
-          else
+          if ! gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release create "${TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
               --target "nexhash-edgeos-temp-build" \
               --title "NexHash EdgeOS 1.1 Industrial — Forge ISO" \
-              --notes "NexHash EdgeOS Industrial 1.1. ISO híbrida amd64 validada para BIOS legado e UEFI. Inclui Opera, Tailscale, Openbox, firewall, watchdog, recuperação de rede, TLP, ZRAM, Calamares e infraestrutura NexHash. Verifique o SHA-256 antes de gravar no pendrive." \
-              --prerelease \
-              "release/${ISO}" \
-              "release/${ISO}.sha256" \
-              "release/BUILD-VALIDATED.txt" \
-              "release/boot-report.txt" \
-              "release/iso-file.txt"
+              --notes "NexHash EdgeOS Industrial 1.1. ISO híbrida amd64 validada para BIOS legado e UEFI. Por limite de tamanho do GitHub, a ISO está publicada em 3 partes. Baixe as 3 partes, o arquivo SHA256 e REASSEMBLE-NEXHASH.cmd para a mesma pasta; execute o CMD e ele recriará a ISO original." \
+              --prerelease
           fi
+          gh release upload "${TAG}" \
+            parts/"${ISO}.part00" \
+            parts/"${ISO}.part01" \
+            parts/"${ISO}.part02" \
+            parts/"${ISO}.sha256" \
+            parts/REASSEMBLE-NEXHASH.cmd \
+            parts/BUILD-VALIDATED.txt \
+            --clobber --repo "${GITHUB_REPOSITORY}"
           gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json url,assets
