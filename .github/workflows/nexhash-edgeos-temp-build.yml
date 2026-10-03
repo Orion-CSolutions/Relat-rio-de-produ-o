@@ -435,6 +435,118 @@ jobs:
           ls -lh "$ISO"
           sha256sum "$ISO"
 
+      - name: Split ISO for ChatGPT delivery
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          ISO="out/NexHash-EdgeOS-2.0-Install-amd64.iso"
+          test -s "$ISO"
+          rm -f out/iso-part-*
+          split -b 450M -d -a 2 "$ISO" out/iso-part-
+          ls -lh out/iso-part-*
+          sha256sum out/iso-part-* > out/iso-parts.sha256
+
+      - name: Upload ISO part 00
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-ISO-part-00
+          path: out/iso-part-00
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload ISO part 01
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-ISO-part-01
+          path: out/iso-part-01
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload ISO part 02
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-ISO-part-02
+          path: out/iso-part-02
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload ISO part 03
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-ISO-part-03
+          path: out/iso-part-03
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload ISO part 04
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-ISO-part-04
+          path: out/iso-part-04
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload ISO part 05
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-ISO-part-05
+          path: out/iso-part-05
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload ISO part 06
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-ISO-part-06
+          path: out/iso-part-06
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload ISO part 07
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-ISO-part-07
+          path: out/iso-part-07
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload ISO part 08
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-ISO-part-08
+          path: out/iso-part-08
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload ISO part checksums
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-ISO-parts-sha256
+          path: out/iso-parts.sha256
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 3
+
       - name: Upload installable ISO
         if: always()
         uses: actions/upload-artifact@v4
