@@ -39,7 +39,10 @@ jobs:
           set -euo pipefail
           ISO=out/NexHash-EdgeOS-1.2-Industrial-amd64.iso
           test -s "$ISO"
-          sha256sum -c "$ISO.sha256"
+          expected="$(awk '{print $1}' "$ISO.sha256")"
+          actual="$(sha256sum "$ISO" | awk '{print $1}')"
+          test "$actual" = "$expected"
+          printf '%s  %s\n' "$actual" "$(basename "$ISO")" > "$ISO.sha256"
           grep -q 'Opera embedded: yes' out/BUILD-VALIDATED.txt
           grep -q 'Tailscale embedded: yes' out/BUILD-VALIDATED.txt
           grep -q 'Wi-Fi stack embedded: yes' out/BUILD-VALIDATED.txt
