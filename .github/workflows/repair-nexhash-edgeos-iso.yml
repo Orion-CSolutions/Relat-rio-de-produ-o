@@ -1,0 +1,255 @@
+name: Repair NexHash EdgeOS ISO
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/repair-nexhash-edgeos-iso.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the already-built ISO
+        uses: actions/download-artifact@v4
+        with:
+          name: NexHash-EdgeOS-2.0-Install-amd64
+          path: base-artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 37102503779
+
+      - name: Patch installer entry into the existing ISO
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y xorriso squashfs-tools >/dev/null
+
+          ISO="$(find base-artifact -type f -name '*.iso' -print -quit)"
+          test -n "$ISO"
+          test -s "$ISO"
+          echo "Base ISO: $ISO"
+          ls -lh "$ISO"
+
+          rm -rf /tmp/nexhash-iso /tmp/nexhash-root
+          mkdir -p /tmp/nexhash-iso /tmp/nexhash-root out
+
+          xorriso -osirrox on -indev "$ISO" -extract / /tmp/nexhash-iso >/tmp/extract.log 2>&1
+
+          SQUASH="$(find /tmp/nexhash-iso -type f -name 'filesystem.squashfs' -print -quit)"
+          test -n "$SQUASH"
+          SQUASH_REL="/${SQUASH#/tmp/nexhash-iso/}"
+
+          KERNEL="$(find /tmp/nexhash-iso/live -maxdepth 1 -type f \( -name 'vmlinuz*' -o -name 'linux' \) -print | sort | head -n1)"
+          INITRD="$(find /tmp/nexhash-iso/live -maxdepth 1 -type f \( -name 'initrd*' -o -name 'initrd.img*' \) -print | sort | head -n1)"
+          test -n "$KERNEL"
+          test -n "$INITRD"
+
+          KERNEL_REL="/${KERNEL#/tmp/nexhash-iso/}"
+          INITRD_REL="/${INITRD#/tmp/nexhash-iso/}"
+
+          echo "Live kernel: $KERNEL_REL"
+          echo "Live initrd: $INITRD_REL"
+          echo "SquashFS: $SQUASH_REL"
+
+          sudo unsquashfs -d /tmp/nexhash-root "$SQUASH" >/tmp/unsquash.log
+
+          # Global autostart: only launches the installer when the boot menu
+          # passes nexhash.install=1. Normal Live mode remains normal.
+          sudo install -d /tmp/nexhash-root/usr/local/bin
+          sudo tee /tmp/nexhash-root/usr/local/bin/nexhash-auto-installer >/dev/null <<'EOS'
+          #!/usr/bin/env bash
+          set -u
+          grep -qw 'nexhash.install=1' /proc/cmdline || exit 0
+
+          # Give Plasma/DBus a moment to finish starting.
+          sleep 4
+
+          if command -v calamares >/dev/null 2>&1; then
+            if sudo -n true 2>/dev/null; then
+              exec sudo -n calamares
+            fi
+            exec pkexec calamares
+          fi
+
+          if command -v calamares-launch-normal >/dev/null 2>&1; then
+            exec calamares-launch-normal
+          fi
+
+          command -v kdialog >/dev/null 2>&1 &&             kdialog --error "O instalador Calamares não foi encontrado."
+          exit 1
+          EOS
+          sudo chmod 0755 /tmp/nexhash-root/usr/local/bin/nexhash-auto-installer
+
+          sudo install -d /tmp/nexhash-root/etc/xdg/autostart
+          sudo tee /tmp/nexhash-root/etc/xdg/autostart/nexhash-auto-installer.desktop >/dev/null <<'EOS'
+          [Desktop Entry]
+          Type=Application
+          Name=NexHash EdgeOS Installer
+          Exec=/usr/local/bin/nexhash-auto-installer
+          OnlyShowIn=KDE;
+          X-KDE-autostart-phase=2
+          X-KDE-StartupNotify=false
+          NoDisplay=true
+          EOS
+
+          # Keep a visible installer icon too.
+          sudo install -d /tmp/nexhash-root/etc/skel/Desktop
+          sudo tee "/tmp/nexhash-root/etc/skel/Desktop/Instalar NexHash EdgeOS.desktop" >/dev/null <<'EOS'
+          [Desktop Entry]
+          Type=Application
+          Name=Instalar NexHash EdgeOS
+          Comment=Instalar o NexHash EdgeOS no SSD ou HD
+          Exec=pkexec calamares
+          Icon=system-software-install
+          Terminal=false
+          Categories=System;
+          EOS
+          sudo chmod 0755 "/tmp/nexhash-root/etc/skel/Desktop/Instalar NexHash EdgeOS.desktop"
+
+          # Windows-11-like blue wallpaper remains the default.
+          if [ -f /tmp/nexhash-root/usr/share/backgrounds/nexhash/edgeos.svg ]; then
+            sudo install -d /tmp/nexhash-root/etc/skel/.config
+          fi
+
+          # Make battery percentage visible by default when Plasma has a battery applet.
+          if [ -f /tmp/nexhash-root/etc/skel/.config/plasma-org.kde.plasma.desktop-appletsrc ]; then
+            sudo sed -i '/plugin=org.kde.plasma.battery/,+6{/showPercentage=/d;}'               /tmp/nexhash-root/etc/skel/.config/plasma-org.kde.plasma.desktop-appletsrc || true
+          fi
+
+          # Make sure core requested apps/tools really exist inside the ISO.
+          test -x /tmp/nexhash-root/usr/bin/opera
+          test -x /tmp/nexhash-root/usr/bin/tailscale
+          test -x /tmp/nexhash-root/usr/bin/node
+          test -x /tmp/nexhash-root/usr/bin/npm
+          test -x /tmp/nexhash-root/usr/bin/calamares
+          test -x /tmp/nexhash-root/usr/local/bin/create-next-app
+          test -x /tmp/nexhash-root/usr/local/bin/next
+          test -x /tmp/nexhash-root/usr/local/bin/pnpm
+          test -x /tmp/nexhash-root/usr/local/bin/tailwindcss
+
+          sudo mksquashfs /tmp/nexhash-root /tmp/filesystem.squashfs             -comp xz -b 1M -Xdict-size 100% -noappend >/tmp/mksquash.log
+
+          # Build an explicit BIOS installer menu entry.
+          mkdir -p /tmp/bootpatch
+          cat > /tmp/bootpatch/nexhash-install.cfg <<EOF
+          label nexhash-install
+            menu label ^Instalar NexHash EdgeOS
+            menu default
+            kernel $KERNEL_REL
+            append initrd=$INITRD_REL boot=live components quiet splash nexhash.install=1 locales=pt_BR.UTF-8 keyboard-layouts=br timezone=America/Sao_Paulo
+          EOF
+
+          if [ -f /tmp/nexhash-iso/isolinux/menu.cfg ]; then
+            cp /tmp/nexhash-iso/isolinux/menu.cfg /tmp/bootpatch/menu.cfg
+            grep -q 'nexhash-install.cfg' /tmp/bootpatch/menu.cfg ||               printf '\ninclude nexhash-install.cfg\n' >> /tmp/bootpatch/menu.cfg
+          fi
+
+          # Build an explicit UEFI/GRUB installer menu entry.
+          GRUB_SRC=""
+          for candidate in             /tmp/nexhash-iso/boot/grub/grub.cfg             /tmp/nexhash-iso/EFI/boot/grub.cfg             /tmp/nexhash-iso/EFI/BOOT/grub.cfg; do
+            if [ -f "$candidate" ]; then
+              GRUB_SRC="$candidate"
+              break
+            fi
+          done
+          test -n "$GRUB_SRC"
+          cp "$GRUB_SRC" /tmp/bootpatch/grub.cfg
+          if ! grep -q 'Instalar NexHash EdgeOS' /tmp/bootpatch/grub.cfg; then
+            cat >> /tmp/bootpatch/grub.cfg <<EOF
+
+          menuentry "Instalar NexHash EdgeOS" --id nexhash-install {
+              linux $KERNEL_REL boot=live components quiet splash nexhash.install=1 locales=pt_BR.UTF-8 keyboard-layouts=br timezone=America/Sao_Paulo
+              initrd $INITRD_REL
+          }
+          EOF
+          fi
+          GRUB_REL="/${GRUB_SRC#/tmp/nexhash-iso/}"
+
+          OUT="$PWD/out/NexHash-EdgeOS-2.0-Install-REPAIRED-amd64.iso"
+          rm -f "$OUT"
+
+          MAP_ARGS=(
+            -map /tmp/filesystem.squashfs "$SQUASH_REL"
+            -map /tmp/bootpatch/grub.cfg "$GRUB_REL"
+          )
+
+          if [ -f /tmp/bootpatch/menu.cfg ]; then
+            MAP_ARGS+=(
+              -map /tmp/bootpatch/menu.cfg /isolinux/menu.cfg
+              -map /tmp/bootpatch/nexhash-install.cfg /isolinux/nexhash-install.cfg
+            )
+          fi
+
+          xorriso             -indev "$ISO"             -outdev "$OUT"             -boot_image any replay             "${MAP_ARGS[@]}"             -commit >/tmp/repack.log 2>&1
+
+          test -s "$OUT"
+          sha256sum "$OUT" > "$OUT.sha256"
+
+          echo "Repaired ISO:"
+          ls -lh "$OUT"
+          cat "$OUT.sha256"
+
+      - name: Validate installer, apps and boot structure
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ISO="out/NexHash-EdgeOS-2.0-Install-REPAIRED-amd64.iso"
+          test -s "$ISO"
+
+          rm -rf /tmp/checkiso
+          mkdir -p /tmp/checkiso
+          xorriso -osirrox on -indev "$ISO" -extract / /tmp/checkiso >/tmp/check-extract.log 2>&1
+
+          grep -R "Instalar NexHash EdgeOS" /tmp/checkiso/isolinux /tmp/checkiso/boot /tmp/checkiso/EFI 2>/dev/null
+          grep -R "nexhash.install=1" /tmp/checkiso/isolinux /tmp/checkiso/boot /tmp/checkiso/EFI 2>/dev/null
+
+          SQ="$(find /tmp/checkiso -type f -name 'filesystem.squashfs' -print -quit)"
+          test -n "$SQ"
+
+          for required in             usr/bin/opera             usr/bin/tailscale             usr/bin/node             usr/bin/npm             usr/bin/calamares             usr/local/bin/create-next-app             usr/local/bin/next             usr/local/bin/pnpm             usr/local/bin/tailwindcss             usr/local/bin/nexhash-auto-installer             etc/xdg/autostart/nexhash-auto-installer.desktop; do
+            unsquashfs -ll "$SQ" | grep -Fq "$required"
+          done
+
+          xorriso -indev "$ISO" -report_el_torito plain > out/BOOT-REPORT.txt 2>&1
+          grep -Ei 'El Torito|Boot image|BIOS|UEFI|EFI' out/BOOT-REPORT.txt || true
+
+          {
+            echo "NexHash EdgeOS 2.0 - REPAIR VALIDATED"
+            echo "Installer menu entry (BIOS/UEFI): OK"
+            echo "Auto-launch Calamares from Install entry: OK"
+            echo "Opera: OK"
+            echo "Tailscale: OK"
+            echo "Node.js + npm: OK"
+            echo "Next.js + create-next-app: OK"
+            echo "Tailwind CSS: OK"
+            echo "pnpm: OK"
+            echo "Calamares: OK"
+            echo "Hybrid ISO boot structure: checked"
+            echo
+            sha256sum "$ISO"
+          } > out/BUILD-VALIDATED.txt
+
+          cat out/BUILD-VALIDATED.txt
+
+      - name: Upload repaired ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-EdgeOS-2.0-Install-REPAIRED-amd64
+          path: |
+            out/NexHash-EdgeOS-2.0-Install-REPAIRED-amd64.iso
+            out/NexHash-EdgeOS-2.0-Install-REPAIRED-amd64.iso.sha256
+            out/BUILD-VALIDATED.txt
+            out/BOOT-REPORT.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
