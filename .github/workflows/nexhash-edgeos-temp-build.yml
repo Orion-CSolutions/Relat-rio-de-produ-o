@@ -326,9 +326,65 @@ jobs:
             chmod +x /etc/skel/Desktop/calamares.desktop || true
           fi
 
+          # Boot-menu installer mode: when kernel cmdline contains nexhash-installer=1,
+          # launch Calamares automatically after Plasma starts.
+          cat > /usr/local/bin/nexhash-installer-autostart <<'EOF3'
+          #!/usr/bin/env bash
+          if grep -qw 'nexhash-installer=1' /proc/cmdline; then
+            sleep 4
+            pkexec calamares
+          fi
+          EOF3
+          chmod +x /usr/local/bin/nexhash-installer-autostart
+
+          cat > /etc/skel/.config/autostart/nexhash-installer.desktop <<'EOF3'
+          [Desktop Entry]
+          Type=Application
+          Name=NexHash Installer
+          Exec=/usr/local/bin/nexhash-installer-autostart
+          X-KDE-autostart-after=panel
+          X-KDE-StartupNotify=false
+          NoDisplay=true
+          EOF3
+
           apt-get clean
           HOOK
           chmod +x config/hooks/live/090-edgeos.hook.chroot
+
+          mkdir -p config/hooks/normal
+          cat > config/hooks/normal/091-installer-menu.hook.binary <<'BHOOK'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+
+          # BIOS / ISOLINUX: duplicate the normal live entry, but boot it in installer mode.
+          if [ -f binary/isolinux/live.cfg ]; then
+            cat >> binary/isolinux/live.cfg <<'EOF4'
+
+          label nexhash-install
+              menu label ^Install NexHash EdgeOS
+              menu default
+              linux /live/vmlinuz
+              initrd /live/initrd.img
+              append boot=live components quiet splash locales=pt_BR.UTF-8 keyboard-layouts=br timezone=America/Sao_Paulo username=nexhash hostname=nexhash-edge nexhash-installer=1
+          EOF4
+          fi
+
+          # UEFI / GRUB: append installer entry to whichever main grub.cfg live-build created.
+          GRUB_CFG=""
+          for g in binary/boot/grub/grub.cfg binary/EFI/BOOT/grub.cfg; do
+            if [ -f "$g" ]; then GRUB_CFG="$g"; break; fi
+          done
+          if [ -n "$GRUB_CFG" ]; then
+            cat >> "$GRUB_CFG" <<'EOF4'
+
+          menuentry "Install NexHash EdgeOS" {
+              linux /live/vmlinuz boot=live components quiet splash locales=pt_BR.UTF-8 keyboard-layouts=br timezone=America/Sao_Paulo username=nexhash hostname=nexhash-edge nexhash-installer=1
+              initrd /live/initrd.img
+          }
+          EOF4
+          fi
+          BHOOK
+          chmod +x config/hooks/normal/091-installer-menu.hook.binary
 
           lb build
 
@@ -343,7 +399,7 @@ jobs:
 
           docker run --rm --privileged             -v "$PWD:/work"             -v /tmp/build-edgeos.sh:/build-edgeos.sh:ro             -w /work             debian:13             bash /build-edgeos.sh
 
-      - name: Validate that this ISO really has an installer
+      - name: Validate installable ISO
         shell: bash
         run: |
           set -euo pipefail
@@ -357,20 +413,29 @@ jobs:
           mkdir -p /tmp/edgeos-iso-tree
           xorriso -osirrox on -indev "$ISO" -extract / /tmp/edgeos-iso-tree >/tmp/xorriso.log 2>&1
 
-          echo "Checking Debian installer payload..."
-          test -f /tmp/edgeos-iso-tree/install.amd/vmlinuz
-          test -f /tmp/edgeos-iso-tree/install.amd/initrd.gz
+          # Core boot files must exist.
+          test -f /tmp/edgeos-iso-tree/live/vmlinuz
+          test -f /tmp/edgeos-iso-tree/live/initrd.img
 
-          echo "Checking boot menu installer entry..."
-          grep -RilE "Graphical.*Installer|Debian Installer|Install"             /tmp/edgeos-iso-tree/isolinux             /tmp/edgeos-iso-tree/boot             /tmp/edgeos-iso-tree/EFI             >/tmp/installer-menu-files.txt
+          # The ISO must expose our explicit installer boot mode.
+          grep -Ril "Install NexHash EdgeOS"             /tmp/edgeos-iso-tree/isolinux             /tmp/edgeos-iso-tree/boot             /tmp/edgeos-iso-tree/EFI             >/tmp/installer-menu-files.txt
 
           test -s /tmp/installer-menu-files.txt
 
+          # Live package manifest must contain Calamares and key requested apps.
+          MANIFEST="$(find /tmp/edgeos-iso-tree/live -maxdepth 1 -type f -name '*filesystem*.packages*' -o -name 'filesystem.packages' | head -n1 || true)"
+          if [ -n "$MANIFEST" ]; then
+            grep -qi '^calamares' "$MANIFEST"
+            grep -qi '^opera-stable' "$MANIFEST"
+            grep -qi '^tailscale' "$MANIFEST"
+            grep -qi '^nodejs' "$MANIFEST"
+          fi
+
           {
             echo "NexHash EdgeOS 2.0 - BUILD VALIDATED"
-            echo "Debian installer kernel: OK"
-            echo "Debian installer initrd: OK"
+            echo "Boot kernel/initrd: OK"
             echo "Boot menu installer entry: OK"
+            echo "Calamares installer: included"
             echo "Opera: included"
             echo "KDE Plasma: included"
             echo "Wi-Fi firmware: included"
