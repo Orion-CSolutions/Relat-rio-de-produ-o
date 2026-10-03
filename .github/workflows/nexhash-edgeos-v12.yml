@@ -1,0 +1,123 @@
+name: Build NexHash EdgeOS 1.2 Industrial
+
+on:
+  push:
+    branches:
+      - nexhash-edgeos-v1.2-build
+    paths:
+      - '.github/workflows/nexhash-edgeos-v12.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout NexHash 1.2 build branch
+        uses: actions/checkout@v4
+        with:
+          ref: nexhash-edgeos-v1.2-build
+
+      - name: Build ISO in clean Debian 13
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --privileged \
+            -v "$PWD:/work" \
+            -w /work \
+            debian:13 \
+            bash -lc 'bash nexhash-edgeos-v12/build.sh'
+
+      - name: Verify final image
+        shell: bash
+        run: |
+          set -euo pipefail
+          ISO=out/NexHash-EdgeOS-1.2-Industrial-amd64.iso
+          test -s "$ISO"
+          sha256sum -c "$ISO.sha256"
+          grep -q 'Opera embedded: yes' out/BUILD-VALIDATED.txt
+          grep -q 'Tailscale embedded: yes' out/BUILD-VALIDATED.txt
+          grep -q 'Wi-Fi stack embedded: yes' out/BUILD-VALIDATED.txt
+          grep -q 'Signed UEFI stack embedded: yes' out/BUILD-VALIDATED.txt
+          grep -Eqi 'BIOS|UEFI|El Torito' out/boot-report.txt
+          cat out/BUILD-VALIDATED.txt
+          cat "$ISO.sha256"
+          ls -lh "$ISO"
+
+      - name: Upload validated artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-EdgeOS-1.2-Industrial-amd64
+          path: |
+            out/NexHash-EdgeOS-1.2-Industrial-amd64.iso
+            out/NexHash-EdgeOS-1.2-Industrial-amd64.iso.sha256
+            out/BUILD-VALIDATED.txt
+            out/boot-report.txt
+            out/iso-file.txt
+            out/qemu-bios.log
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 5
+
+      - name: Host single ISO download
+        shell: bash
+        run: |
+          set -euo pipefail
+          ISO=out/NexHash-EdgeOS-1.2-Industrial-amd64.iso
+          response="$(curl -fsS --retry 4 --retry-delay 5 \
+            -F "file=@$ISO;type=application/x-iso9660-image" \
+            https://upload.gofile.io/uploadfile)"
+          test "$(printf '%s' "$response" | jq -r '.status')" = "ok"
+          page="$(printf '%s' "$response" | jq -r '.data.downloadPage')"
+          folder="$(printf '%s' "$response" | jq -r '.data.parentFolder')"
+          token="$(printf '%s' "$response" | jq -r '.data.guestToken // empty')"
+          if [[ -n "$folder" && -n "$token" ]]; then
+            curl -fsS --retry 3 \
+              -F "file=@$ISO.sha256;type=text/plain" \
+              -F "folderId=$folder" \
+              -F "token=$token" \
+              https://upload.gofile.io/uploadfile >/dev/null
+          fi
+          echo "NEXHASH_V12_DOWNLOAD=$page"
+          echo "NEXHASH_V12_SHA256=$(awk '{print $1}' "$ISO.sha256")"
+
+      - name: Publish GitHub backup
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ISO=out/NexHash-EdgeOS-1.2-Industrial-amd64.iso
+          TAG=nexhash-edgeos-v1.2.0-industrial
+          mkdir -p parts
+          split -b 700M -d -a 2 "$ISO" "parts/$(basename "$ISO").part"
+          cp "$ISO.sha256" parts/
+          cp out/BUILD-VALIDATED.txt parts/
+          cat > parts/REASSEMBLE-NEXHASH-V12.cmd <<'CMD'
+          @echo off
+          setlocal
+          set ISO=NexHash-EdgeOS-1.2-Industrial-amd64.iso
+          echo Recriando %ISO%...
+          copy /b "%ISO%.part00"+"%ISO%.part01"+"%ISO%.part02"+"%ISO%.part03" "%ISO%" 2>nul || copy /b "%ISO%.part00"+"%ISO%.part01"+"%ISO%.part02" "%ISO%"
+          if errorlevel 1 (
+            echo ERRO ao recriar a ISO.
+            pause
+            exit /b 1
+          )
+          certutil -hashfile "%ISO%" SHA256
+          echo Compare com o arquivo .sha256.
+          pause
+          CMD
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --target nexhash-edgeos-v1.2-build \
+              --title "NexHash EdgeOS 1.2 Industrial — Forge" \
+              --notes "ISO 1.2 corrigida: Opera e Tailscale embutidos no filesystem, Wi-Fi com wpa_supplicant/rfkill/firmwares, nm-applet, barra com bateria em porcentagem, branding renovado e stack UEFI assinada." \
+              --prerelease
+          fi
+          gh release upload "$TAG" parts/* --clobber --repo "$GITHUB_REPOSITORY"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets
