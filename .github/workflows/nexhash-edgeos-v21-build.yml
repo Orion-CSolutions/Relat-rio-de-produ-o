@@ -1,4 +1,4 @@
-name: Build NexHash EdgeOS 2.1 FINAL
+name: Build NexHash EdgeOS 2.2 PRODUCT FINAL
 
 on:
   push:
@@ -37,17 +37,17 @@ jobs:
           test -s "$ISO"
           cp "$ISO" source/NexHash-EdgeOS-2.0-FINAL-Install-amd64.iso
 
-      - name: Build and validate NexHash EdgeOS 2.1
+      - name: Build and validate NexHash EdgeOS 2.2 Product Final
         shell: bash
         run: bash .github/scripts/nexhash-v21-patch.sh source out
 
       - name: Upload final ISO
         uses: actions/upload-artifact@v4
         with:
-          name: NexHash-EdgeOS-2.1-FINAL-Install-amd64
+          name: NexHash-EdgeOS-2.2-PRODUCT-FINAL-Install-amd64
           path: |
-            out/NexHash-EdgeOS-2.1-FINAL-Install-amd64.iso
-            out/NexHash-EdgeOS-2.1-FINAL-Install-amd64.iso.sha256
+            out/NexHash-EdgeOS-2.2-PRODUCT-FINAL-Install-amd64.iso
+            out/NexHash-EdgeOS-2.2-PRODUCT-FINAL-Install-amd64.iso.sha256
             out/FINAL-VALIDATED.txt
           compression-level: 0
           retention-days: 3
@@ -55,7 +55,7 @@ jobs:
       - name: Upload split ISO
         uses: actions/upload-artifact@v4
         with:
-          name: NexHash-EdgeOS-2.1-FINAL-parts
+          name: NexHash-EdgeOS-2.2-PRODUCT-FINAL-parts
           path: |
             out/final-part-*
             out/final-parts.sha256
