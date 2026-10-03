@@ -425,7 +425,8 @@ grep -q '^Package: plasma-nm$' verify/status
 grep -q '^Package: powerdevil$' verify/status
 grep -q '^Package: opera-stable$' verify/status
 grep -q '^Package: tailscale$' verify/status
-grep -q '^Package: nodejs
+grep -q '^Package: nodejs$' verify/status
+grep -q '^Package: python3-pyqt5$' verify/status
 test "$(stat -c%s "$DEST")" -gt 3000000000
 
 {
@@ -443,55 +444,7 @@ test "$(stat -c%s "$DEST")" -gt 3000000000
   echo "Opera: OK"
   echo "Tailscale: OK"
   echo "Node.js: OK"
-  echo "KDE/PowerDevil: OK"
-  echo "User wallpaper via Higgsfield: OK"
-  echo
-  sha256sum "$DEST"
-} | tee "$OUT_DIR/FINAL-VALIDATED.txt"
-
-split -b 450M -d -a 2 "$DEST" "$OUT_DIR/final-part-"
-sha256sum "$OUT_DIR"/final-part-* > "$OUT_DIR/final-parts.sha256"
- verify/status
-grep -q '^Package: python3-pyqt5
-test "$(stat -c%s "$DEST")" -gt 3000000000
-
-{
-  echo "NEXHASH EDGEOS 2.2 PRODUCT FINAL ISO VALIDATED"
-  echo "BIOS installer menu: OK"
-  echo "UEFI installer menu: OK"
-  echo "nexhash-installer=1: OK"
-  echo "Calamares installer/autostart: OK"
-  echo "NetworkManager backend: OK"
-  echo "Plasma network Connect UI: OK"
-  echo "Wi-Fi radio setup: OK"
-  echo "Battery percentage visualization: OK"
-  echo "Opera: OK"
-  echo "Tailscale: OK"
-  echo "Node.js: OK"
-  echo "KDE/PowerDevil: OK"
-  echo "User wallpaper via Higgsfield: OK"
-  echo
-  sha256sum "$DEST"
-} | tee "$OUT_DIR/FINAL-VALIDATED.txt"
-
-split -b 450M -d -a 2 "$DEST" "$OUT_DIR/final-part-"
-sha256sum "$OUT_DIR"/final-part-* > "$OUT_DIR/final-parts.sha256"
- verify/status
-test "$(stat -c%s "$DEST")" -gt 3000000000
-
-{
-  echo "NEXHASH EDGEOS 2.2 PRODUCT FINAL ISO VALIDATED"
-  echo "BIOS installer menu: OK"
-  echo "UEFI installer menu: OK"
-  echo "nexhash-installer=1: OK"
-  echo "Calamares installer/autostart: OK"
-  echo "NetworkManager backend: OK"
-  echo "Plasma network Connect UI: OK"
-  echo "Wi-Fi radio setup: OK"
-  echo "Battery percentage visualization: OK"
-  echo "Opera: OK"
-  echo "Tailscale: OK"
-  echo "Node.js: OK"
+  echo "PyQt welcome runtime: OK"
   echo "KDE/PowerDevil: OK"
   echo "User wallpaper via Higgsfield: OK"
   echo
