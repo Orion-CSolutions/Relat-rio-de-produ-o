@@ -32,6 +32,7 @@ jobs:
           cat nexhash-edgeos/parts/part-* | base64 -d | gunzip > nexhash-edgeos/build_nexhash_edgeos.sh
           chmod +x nexhash-edgeos/build_nexhash_edgeos.sh
           sed -i 's|install -d config/includes.chroot/etc/skel/Desktop config/includes.chroot/etc/skel/.config/autostart|install -d config/includes.chroot/etc/skel/Desktop config/includes.chroot/etc/skel/.config/autostart config/includes.chroot/etc/xdg/autostart|' nexhash-edgeos/build_nexhash_edgeos.sh
+          sed -i 's|^spectacle$|kde-spectacle|' nexhash-edgeos/build_nexhash_edgeos.sh
           bash -n nexhash-edgeos/build_nexhash_edgeos.sh
           grep -n 'xdg/autostart' nexhash-edgeos/build_nexhash_edgeos.sh | head
           sha256sum nexhash-edgeos/build_nexhash_edgeos.sh
