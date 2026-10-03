@@ -152,6 +152,80 @@ jobs:
           name=breeze-dark
           EOF
 
+          cat > config/includes.chroot/etc/skel/.config/plasma-org.kde.plasma.desktop-appletsrc <<'EOF'
+          [ActionPlugins][0]
+          RightButton;NoModifier=org.kde.contextmenu
+
+          [Containments][1]
+          activityId=
+          formfactor=0
+          immutability=1
+          lastScreen=0
+          location=0
+          plugin=org.kde.plasma.folder
+          wallpaperplugin=org.kde.image
+
+          [Containments][1][Configuration][General]
+          Image=file:///usr/share/backgrounds/nexhash/edgeos.svg
+          SlidePaths=/usr/share/wallpapers/
+
+          [Containments][2]
+          activityId=
+          formfactor=2
+          immutability=1
+          lastScreen=0
+          location=4
+          plugin=org.kde.panel
+          wallpaperplugin=org.kde.image
+
+          [Containments][2][General]
+          AppletOrder=3;4;5;6;7;8;9;10
+
+          [Containments][2][Applets][3]
+          immutability=1
+          plugin=org.kde.plasma.panelspacer
+          [Containments][2][Applets][3][Configuration][General]
+          expanding=true
+
+          [Containments][2][Applets][4]
+          immutability=1
+          plugin=org.kde.plasma.kickoff
+
+          [Containments][2][Applets][5]
+          immutability=1
+          plugin=org.kde.plasma.icontasks
+          [Containments][2][Applets][5][Configuration][General]
+          launchers=applications:org.kde.dolphin.desktop,applications:opera.desktop,applications:org.kde.konsole.desktop
+          showOnlyCurrentDesktop=false
+
+          [Containments][2][Applets][6]
+          immutability=1
+          plugin=org.kde.plasma.panelspacer
+          [Containments][2][Applets][6][Configuration][General]
+          expanding=true
+
+          [Containments][2][Applets][7]
+          immutability=1
+          plugin=org.kde.plasma.battery
+          [Containments][2][Applets][7][Configuration][General]
+          showPercentage=true
+
+          [Containments][2][Applets][8]
+          immutability=1
+          plugin=org.kde.plasma.systemtray
+
+          [Containments][2][Applets][9]
+          immutability=1
+          plugin=org.kde.plasma.digitalclock
+          [Containments][2][Applets][9][Configuration][Appearance]
+          showDate=true
+          dateFormat=shortDate
+
+          [Containments][2][Applets][10]
+          immutability=1
+          plugin=org.kde.plasma.showdesktop
+          EOF
+
           cat > config/includes.chroot/usr/local/bin/nexhash-desktop-setup <<'EOF'
           #!/usr/bin/env bash
           set -e
@@ -229,7 +303,7 @@ jobs:
           apt-get update
           apt-get install -y opera-stable tailscale
 
-          npm install -g create-next-app@latest tailwindcss@latest @tailwindcss/cli@latest pnpm@latest
+          npm install -g next@latest react@latest react-dom@latest create-next-app@latest tailwindcss@latest @tailwindcss/cli@latest pnpm@latest typescript@latest
 
           update-alternatives --set x-www-browser /usr/bin/opera || true
           systemctl enable NetworkManager.service sddm.service tailscaled.service || true
@@ -313,6 +387,7 @@ jobs:
           sha256sum "$ISO"
 
       - name: Upload installable ISO
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: NexHash-EdgeOS-2.0-Install-amd64
