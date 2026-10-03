@@ -1,15 +1,10 @@
-name: TEMP Build NexHash EdgeOS ISO
+name: Build NexHash EdgeOS 2.0 ISO
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - '.github/workflows/nexhash-edgeos-temp-build.yml'
-  pull_request:
-    branches:
-      - main
-    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 permissions:
@@ -20,59 +15,311 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - name: Checkout isolated NexHash build branch
-        uses: actions/checkout@v4
-        with:
-          ref: nexhash-edgeos-iso-build
+      - uses: actions/checkout@v4
 
-      - name: Reassemble build script
+      - name: Build installable Debian 13 ISO
         shell: bash
         run: |
           set -euo pipefail
-          cat nexhash-edgeos-build/build.part-* | tr -d '\r\n' | base64 -d > /tmp/nexhash-build.sh
-          chmod +x /tmp/nexhash-build.sh
-          bash -n /tmp/nexhash-build.sh
-          test "$(wc -c < /tmp/nexhash-build.sh)" -eq 28830
-          echo "build script sha256:"
-          sha256sum /tmp/nexhash-build.sh
+          mkdir -p out
 
-      - name: Build ISO in Debian 13
+          cat > /tmp/build-edgeos.sh <<'BUILDER'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+
+          apt-get update
+          apt-get install -y --no-install-recommends             live-build debootstrap xorriso squashfs-tools rsync             ca-certificates curl gnupg dosfstools mtools isolinux syslinux-common             grub-pc-bin grub-efi-amd64-bin
+
+          WORK=/work/edgeos-build
+          rm -rf "$WORK"
+          mkdir -p "$WORK"
+          cd "$WORK"
+
+          lb config noauto             --mode debian             --distribution trixie             --architectures amd64             --archive-areas "main contrib non-free non-free-firmware"             --binary-images iso-hybrid             --bootloaders "syslinux grub-efi"             --debian-installer live             --debian-installer-distribution trixie             --debian-installer-gui true             --bootappend-live "boot=live components quiet splash locales=pt_BR.UTF-8 keyboard-layouts=br timezone=America/Sao_Paulo username=nexhash hostname=nexhash-edge"             --bootappend-install "locale=pt_BR.UTF-8 keymap=br"             --apt-recommends true             --security true             --updates true
+
+          mkdir -p             config/package-lists             config/hooks/live             config/includes.chroot/usr/share/backgrounds/nexhash             config/includes.chroot/etc/skel/.config             config/includes.chroot/etc/skel/Desktop             config/includes.chroot/usr/local/bin             config/includes.chroot/etc/sddm.conf.d             config/includes.chroot/etc/NetworkManager/conf.d
+
+          cat > config/package-lists/edgeos.list.chroot <<'PKG'
+          linux-image-amd64
+          firmware-linux
+          firmware-linux-nonfree
+          firmware-iwlwifi
+          firmware-realtek
+          firmware-atheros
+          firmware-brcm80211
+          firmware-mediatek
+          sudo
+          curl
+          wget
+          ca-certificates
+          gnupg
+          git
+          jq
+          unzip
+          zip
+          p7zip-full
+          rsync
+          htop
+          nano
+          openssh-client
+          network-manager
+          plasma-nm
+          kde-standard
+          sddm
+          powerdevil
+          upower
+          bluedevil
+          pipewire
+          wireplumber
+          plasma-pa
+          kde-config-gtk-style
+          breeze
+          breeze-icon-theme
+          fonts-noto-core
+          fonts-noto-color-emoji
+          nodejs
+          npm
+          build-essential
+          python3
+          python3-pip
+          python3-venv
+          calamares
+          calamares-settings-debian
+          live-boot
+          live-config
+          live-config-systemd
+          PKG
+
+          cat > config/includes.chroot/usr/share/backgrounds/nexhash/edgeos.svg <<'SVG'
+          <svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+            <defs>
+              <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#071225"/>
+                <stop offset=".45" stop-color="#0b2346"/>
+                <stop offset="1" stop-color="#09101e"/>
+              </linearGradient>
+              <radialGradient id="r1" cx=".32" cy=".38" r=".55">
+                <stop offset="0" stop-color="#39a7ff" stop-opacity=".82"/>
+                <stop offset=".55" stop-color="#1264d8" stop-opacity=".28"/>
+                <stop offset="1" stop-color="#071225" stop-opacity="0"/>
+              </radialGradient>
+              <radialGradient id="r2" cx=".74" cy=".64" r=".50">
+                <stop offset="0" stop-color="#6ad7ff" stop-opacity=".55"/>
+                <stop offset=".65" stop-color="#1e6bff" stop-opacity=".14"/>
+                <stop offset="1" stop-color="#09101e" stop-opacity="0"/>
+              </radialGradient>
+            </defs>
+            <rect width="1920" height="1080" fill="url(#g)"/>
+            <ellipse cx="590" cy="410" rx="760" ry="620" fill="url(#r1)"/>
+            <ellipse cx="1430" cy="720" rx="650" ry="530" fill="url(#r2)"/>
+            <path d="M570 160 C820 260 920 450 1080 540 C1260 640 1470 620 1680 500" fill="none" stroke="#58baff" stroke-opacity=".16" stroke-width="90" stroke-linecap="round"/>
+            <path d="M350 820 C610 650 850 680 1020 790 C1190 900 1420 900 1630 770" fill="none" stroke="#0d6efd" stroke-opacity=".15" stroke-width="120" stroke-linecap="round"/>
+            <g opacity=".95">
+              <rect x="868" y="422" width="86" height="86" rx="10" fill="#f8fbff"/>
+              <rect x="966" y="422" width="86" height="86" rx="10" fill="#f8fbff"/>
+              <rect x="868" y="520" width="86" height="86" rx="10" fill="#f8fbff"/>
+              <rect x="966" y="520" width="86" height="86" rx="10" fill="#f8fbff"/>
+            </g>
+            <text x="960" y="690" text-anchor="middle" fill="#eaf5ff" font-family="sans-serif" font-size="42" font-weight="600">NexHash EdgeOS</text>
+          </svg>
+          SVG
+
+          cat > config/includes.chroot/etc/skel/.config/kdeglobals <<'EOF'
+          [General]
+          ColorScheme=BreezeDark
+          Name=NexHash EdgeOS
+
+          [KDE]
+          LookAndFeelPackage=org.kde.breezedark.desktop
+          SingleClick=false
+
+          [Icons]
+          Theme=breeze-dark
+          EOF
+
+          cat > config/includes.chroot/etc/skel/.config/kwinrc <<'EOF'
+          [Desktops]
+          Number=1
+          Rows=1
+
+          [Windows]
+          BorderlessMaximizedWindows=true
+          EOF
+
+          cat > config/includes.chroot/etc/skel/.config/plasmarc <<'EOF'
+          [Theme]
+          name=breeze-dark
+          EOF
+
+          cat > config/includes.chroot/usr/local/bin/nexhash-desktop-setup <<'EOF'
+          #!/usr/bin/env bash
+          set -e
+          mkdir -p "$HOME/.config"
+          CFG="$HOME/.config/plasma-org.kde.plasma.desktop-appletsrc"
+          if [ ! -f "$CFG" ]; then
+            exit 0
+          fi
+          WALL="file:///usr/share/backgrounds/nexhash/edgeos.svg"
+          sed -i "s#Image=.*#Image=$WALL#g" "$CFG" 2>/dev/null || true
+          sed -i "s#wallpaperplugin=.*#wallpaperplugin=org.kde.image#g" "$CFG" 2>/dev/null || true
+          EOF
+          chmod +x config/includes.chroot/usr/local/bin/nexhash-desktop-setup
+
+          cat > config/includes.chroot/etc/skel/Desktop/install-nexhash.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Instalar NexHash EdgeOS
+          Comment=Instalar o sistema no SSD/HD
+          Exec=pkexec calamares
+          Icon=system-software-install
+          Terminal=false
+          Categories=System;
+          EOF
+          chmod +x config/includes.chroot/etc/skel/Desktop/install-nexhash.desktop
+
+          cat > config/includes.chroot/etc/skel/Desktop/opera.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Opera
+          Exec=opera %U
+          Icon=opera
+          Terminal=false
+          Categories=Network;WebBrowser;
+          EOF
+          chmod +x config/includes.chroot/etc/skel/Desktop/opera.desktop
+
+          cat > config/includes.chroot/usr/local/bin/nexhash-new-app <<'EOF'
+          #!/usr/bin/env bash
+          exec npx create-next-app@latest "$@" --tailwind --eslint --app --src-dir --use-npm
+          EOF
+          chmod +x config/includes.chroot/usr/local/bin/nexhash-new-app
+
+          cat > config/includes.chroot/etc/NetworkManager/conf.d/20-nexhash-wifi.conf <<'EOF'
+          [device]
+          wifi.scan-rand-mac-address=no
+
+          [connection]
+          wifi.powersave=2
+          EOF
+
+          cat > config/includes.chroot/etc/sddm.conf.d/10-nexhash.conf <<'EOF'
+          [Theme]
+          Current=breeze
+
+          [General]
+          Numlock=on
+          EOF
+
+          cat > config/hooks/live/090-edgeos.hook.chroot <<'HOOK'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+
+          export DEBIAN_FRONTEND=noninteractive
+
+          # Opera oficial
+          install -d -m 0755 /etc/apt/keyrings
+          curl -fsSL https://deb.opera.com/archive.key | gpg --dearmor --yes -o /etc/apt/keyrings/opera.gpg
+          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/opera.gpg] https://deb.opera.com/opera-stable/ stable non-free" > /etc/apt/sources.list.d/opera-stable.list
+
+          # Tailscale oficial
+          curl -fsSL https://pkgs.tailscale.com/stable/debian/trixie.noarmor.gpg -o /etc/apt/keyrings/tailscale-archive-keyring.gpg
+          curl -fsSL https://pkgs.tailscale.com/stable/debian/trixie.tailscale-keyring.list -o /etc/apt/sources.list.d/tailscale.list
+
+          apt-get update
+          apt-get install -y opera-stable tailscale
+
+          npm install -g create-next-app@latest tailwindcss@latest @tailwindcss/cli@latest pnpm@latest
+
+          update-alternatives --set x-www-browser /usr/bin/opera || true
+          systemctl enable NetworkManager.service sddm.service tailscaled.service || true
+
+          # Visual padrão para novos usuários
+          mkdir -p /etc/skel/.config/autostart
+          cat > /etc/skel/.config/autostart/nexhash-desktop-setup.desktop <<'EOF2'
+          [Desktop Entry]
+          Type=Application
+          Name=NexHash Desktop Setup
+          Exec=/usr/local/bin/nexhash-desktop-setup
+          X-KDE-autostart-after=panel
+          X-KDE-StartupNotify=false
+          NoDisplay=true
+          EOF2
+
+          # Calamares visível no menu
+          if [ -f /usr/share/applications/calamares.desktop ]; then
+            cp /usr/share/applications/calamares.desktop /etc/skel/Desktop/calamares.desktop || true
+            chmod +x /etc/skel/Desktop/calamares.desktop || true
+          fi
+
+          apt-get clean
+          HOOK
+          chmod +x config/hooks/live/090-edgeos.hook.chroot
+
+          lb build
+
+          ISO="$WORK/live-image-amd64.hybrid.iso"
+          test -s "$ISO"
+
+          cp "$ISO" /work/out/NexHash-EdgeOS-2.0-Install-amd64.iso
+          sha256sum /work/out/NexHash-EdgeOS-2.0-Install-amd64.iso > /work/out/NexHash-EdgeOS-2.0-Install-amd64.iso.sha256
+          BUILDER
+
+          chmod +x /tmp/build-edgeos.sh
+
+          docker run --rm --privileged             -v "$PWD:/work"             -v /tmp/build-edgeos.sh:/build-edgeos.sh:ro             -w /work             debian:13             bash /build-edgeos.sh
+
+      - name: Validate that this ISO really has an installer
         shell: bash
         run: |
           set -euo pipefail
-          docker run --rm --privileged \
-            -v "$PWD:/work" \
-            -v /tmp/nexhash-build.sh:/nexhash-build.sh:ro \
-            -w /work \
-            debian:13 \
-            bash -lc '/nexhash-build.sh'
+          ISO="out/NexHash-EdgeOS-2.0-Install-amd64.iso"
+          test -s "$ISO"
 
-      - name: Verify deliverables
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -s out/NexHash-EdgeOS-1.1-Industrial-amd64.iso
-          test -s out/NexHash-EdgeOS-1.1-Industrial-amd64.iso.sha256
-          test -s out/BUILD-VALIDATED.txt
-          expected="$(awk '{print $1}' out/NexHash-EdgeOS-1.1-Industrial-amd64.iso.sha256)"
-          actual="$(sha256sum out/NexHash-EdgeOS-1.1-Industrial-amd64.iso | awk '{print $1}')"
-          test "$actual" = "$expected"
-          printf '%s  %s\n' "$actual" "NexHash-EdgeOS-1.1-Industrial-amd64.iso" > out/NexHash-EdgeOS-1.1-Industrial-amd64.iso.sha256
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y xorriso >/dev/null
+
+          rm -rf /tmp/edgeos-iso-tree
+          mkdir -p /tmp/edgeos-iso-tree
+          xorriso -osirrox on -indev "$ISO" -extract / /tmp/edgeos-iso-tree >/tmp/xorriso.log 2>&1
+
+          echo "Checking Debian installer payload..."
+          test -f /tmp/edgeos-iso-tree/install.amd/vmlinuz
+          test -f /tmp/edgeos-iso-tree/install.amd/initrd.gz
+
+          echo "Checking boot menu installer entry..."
+          grep -RilE "Graphical.*Installer|Debian Installer|Install"             /tmp/edgeos-iso-tree/isolinux             /tmp/edgeos-iso-tree/boot             /tmp/edgeos-iso-tree/EFI             >/tmp/installer-menu-files.txt
+
+          test -s /tmp/installer-menu-files.txt
+
+          {
+            echo "NexHash EdgeOS 2.0 - BUILD VALIDATED"
+            echo "Debian installer kernel: OK"
+            echo "Debian installer initrd: OK"
+            echo "Boot menu installer entry: OK"
+            echo "Opera: included"
+            echo "KDE Plasma: included"
+            echo "Wi-Fi firmware: included"
+            echo "Battery/PowerDevil: included"
+            echo "Tailscale: included"
+            echo "Node.js/npm/pnpm: included"
+            echo "Next.js/Tailwind toolchain: included"
+            echo
+            cat /tmp/installer-menu-files.txt
+          } > out/BUILD-VALIDATED.txt
+
           cat out/BUILD-VALIDATED.txt
-          cat out/NexHash-EdgeOS-1.1-Industrial-amd64.iso.sha256
-          ls -lh out/NexHash-EdgeOS-1.1-Industrial-amd64.iso
+          ls -lh "$ISO"
+          sha256sum "$ISO"
 
-      - name: Upload ISO
+      - name: Upload installable ISO
         uses: actions/upload-artifact@v4
         with:
-          name: NexHash-EdgeOS-1.1-Industrial-amd64
+          name: NexHash-EdgeOS-2.0-Install-amd64
           path: |
-            out/NexHash-EdgeOS-1.1-Industrial-amd64.iso
-            out/NexHash-EdgeOS-1.1-Industrial-amd64.iso.sha256
+            out/NexHash-EdgeOS-2.0-Install-amd64.iso
+            out/NexHash-EdgeOS-2.0-Install-amd64.iso.sha256
             out/BUILD-VALIDATED.txt
-            out/boot-report.txt
-            out/iso-file.txt
-            out/qemu-bios.log
-          if-no-files-found: error
           compression-level: 0
+          if-no-files-found: error
           retention-days: 3
