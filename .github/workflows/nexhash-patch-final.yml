@@ -1,0 +1,201 @@
+name: Patch Final NexHash EdgeOS ISO
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/nexhash-patch-final.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download complete NexHash ISO
+        uses: actions/download-artifact@v4
+        with:
+          name: NexHash-EdgeOS-2.0-Install-amd64
+          path: source
+          run-id: 37103939710
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Patch real installer boot entries
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y xorriso squashfs-tools >/dev/null
+
+          SRC="$(find source -type f -name '*.iso' | head -n1)"
+          test -s "$SRC"
+          mkdir -p work out
+
+          # Confirm the installed OS already contains Calamares + our installer autostart.
+          xorriso -osirrox on -indev "$SRC" -extract /live/filesystem.squashfs work/filesystem.squashfs >/dev/null 2>&1
+          unsquashfs -cat work/filesystem.squashfs usr/local/bin/nexhash-installer-autostart > work/nexhash-installer-autostart
+          grep -q "nexhash-installer=1" work/nexhash-installer-autostart
+          unsquashfs -cat work/filesystem.squashfs etc/skel/.config/autostart/nexhash-installer.desktop > work/nexhash-installer.desktop
+          grep -q "nexhash-installer-autostart" work/nexhash-installer.desktop
+
+          # BIOS menu.
+          xorriso -osirrox on -indev "$SRC" -extract /isolinux/live.cfg work/live.cfg >/dev/null 2>&1
+          cat >> work/live.cfg <<'EOF_BIOS'
+
+          label nexhash-install
+              menu label ^Install NexHash EdgeOS
+              menu default
+              linux /live/vmlinuz
+              initrd /live/initrd.img
+              append boot=live components quiet splash locales=pt_BR.UTF-8 keyboard-layouts=br timezone=America/Sao_Paulo username=nexhash hostname=nexhash-edge nexhash-installer=1
+          EOF_BIOS
+
+          # UEFI / GRUB menu.
+          xorriso -osirrox on -indev "$SRC" -extract /boot/grub/grub.cfg work/grub.cfg >/dev/null 2>&1
+          cat >> work/grub.cfg <<'EOF_GRUB'
+
+          menuentry "Install NexHash EdgeOS" {
+              linux /live/vmlinuz boot=live components quiet splash locales=pt_BR.UTF-8 keyboard-layouts=br timezone=America/Sao_Paulo username=nexhash hostname=nexhash-edge nexhash-installer=1
+              initrd /live/initrd.img
+          }
+          EOF_GRUB
+
+          DEST="out/NexHash-EdgeOS-2.0-FINAL-Install-amd64.iso"
+          xorriso             -indev "$SRC"             -outdev "$DEST"             -boot_image any replay             -map work/live.cfg /isolinux/live.cfg             -map work/grub.cfg /boot/grub/grub.cfg             -commit
+
+          test -s "$DEST"
+          sha256sum "$DEST" > "$DEST.sha256"
+
+      - name: Validate final ISO
+        shell: bash
+        run: |
+          set -euo pipefail
+          ISO="out/NexHash-EdgeOS-2.0-FINAL-Install-amd64.iso"
+          rm -rf verify
+          mkdir -p verify
+
+          xorriso -osirrox on -indev "$ISO" -extract /isolinux/live.cfg verify/live.cfg >/dev/null 2>&1
+          xorriso -osirrox on -indev "$ISO" -extract /boot/grub/grub.cfg verify/grub.cfg >/dev/null 2>&1
+          xorriso -osirrox on -indev "$ISO" -extract /live/filesystem.packages verify/filesystem.packages >/dev/null 2>&1
+
+          grep -q "Install NexHash EdgeOS" verify/live.cfg
+          grep -q "nexhash-installer=1" verify/live.cfg
+          grep -q "Install NexHash EdgeOS" verify/grub.cfg
+          grep -q "nexhash-installer=1" verify/grub.cfg
+          grep -qi '^calamares' verify/filesystem.packages
+          grep -qi '^opera-stable' verify/filesystem.packages
+          grep -qi '^tailscale' verify/filesystem.packages
+          grep -qi '^nodejs' verify/filesystem.packages
+          test "$(stat -c%s "$ISO")" -gt 3000000000
+
+          {
+            echo "NEXHASH EDGEOS FINAL ISO VALIDATED"
+            echo "BIOS installer menu: OK"
+            echo "UEFI installer menu: OK"
+            echo "Installer autostart in installed live filesystem: OK"
+            echo "Calamares: OK"
+            echo "Opera: OK"
+            echo "Tailscale: OK"
+            echo "Node.js: OK"
+            echo "Higgsfield wallpaper: embedded by source build"
+            echo
+            sha256sum "$ISO"
+          } | tee out/FINAL-VALIDATED.txt
+
+      - name: Split final ISO for delivery
+        shell: bash
+        run: |
+          set -euo pipefail
+          ISO="out/NexHash-EdgeOS-2.0-FINAL-Install-amd64.iso"
+          split -b 450M -d -a 2 "$ISO" out/final-part-
+          sha256sum out/final-part-* > out/final-parts.sha256
+          ls -lh out/final-part-*
+
+      - name: Upload final full ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-EdgeOS-2.0-FINAL-Install-amd64
+          path: |
+            out/NexHash-EdgeOS-2.0-FINAL-Install-amd64.iso
+            out/NexHash-EdgeOS-2.0-FINAL-Install-amd64.iso.sha256
+            out/FINAL-VALIDATED.txt
+          compression-level: 0
+          retention-days: 3
+
+      - name: Upload final part 00
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-FINAL-part-00
+          path: out/final-part-00
+          compression-level: 0
+          retention-days: 3
+      - name: Upload final part 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-FINAL-part-01
+          path: out/final-part-01
+          compression-level: 0
+          retention-days: 3
+      - name: Upload final part 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-FINAL-part-02
+          path: out/final-part-02
+          compression-level: 0
+          retention-days: 3
+      - name: Upload final part 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-FINAL-part-03
+          path: out/final-part-03
+          compression-level: 0
+          retention-days: 3
+      - name: Upload final part 04
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-FINAL-part-04
+          path: out/final-part-04
+          compression-level: 0
+          retention-days: 3
+      - name: Upload final part 05
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-FINAL-part-05
+          path: out/final-part-05
+          compression-level: 0
+          retention-days: 3
+      - name: Upload final part 06
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-FINAL-part-06
+          path: out/final-part-06
+          compression-level: 0
+          retention-days: 3
+      - name: Upload final part 07
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-FINAL-part-07
+          path: out/final-part-07
+          compression-level: 0
+          retention-days: 3
+      - name: Upload final part 08
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-FINAL-part-08
+          path: out/final-part-08
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload final part checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-FINAL-parts-sha256
+          path: out/final-parts.sha256
+          compression-level: 0
+          retention-days: 3
