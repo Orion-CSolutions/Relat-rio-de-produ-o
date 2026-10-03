@@ -3,12 +3,11 @@ set -Eeuo pipefail
 
 echo "=== NexHash EdgeOS Secure Boot Repair ==="
 
-if [[ $EUID -ne 0 ]]; then
+if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   echo "Execute com sudo."
   exit 1
 fi
 
-# Find the internal non-USB disk containing the installed NexHash system.
 DISK=""
 while read -r name type tran size model; do
   [[ "$type" == "disk" ]] || continue
@@ -52,13 +51,22 @@ fi
 echo "Raiz: $ROOT_PART"
 echo "EFI : $EFI_PART"
 
+# Avoid collisions with desktop automount.
+for p in "$EFI_PART" "$ROOT_PART"; do
+  old="$(findmnt -rn -S "$p" -o TARGET | head -n1 || true)"
+  if [[ -n "$old" ]]; then
+    echo "Desmontando montagem automatica: $p em $old"
+    umount "$old" || true
+  fi
+done
+
 MNT=/mnt/nexhash-repair
 mkdir -p "$MNT"
 mount "$ROOT_PART" "$MNT"
 mkdir -p "$MNT/boot/efi"
 mount "$EFI_PART" "$MNT/boot/efi"
 
-for d in dev dev/pts proc sys run; do
+for d in dev proc sys run; do
   mount --rbind "/$d" "$MNT/$d"
   mount --make-rslave "$MNT/$d"
 done
@@ -69,7 +77,7 @@ fi
 
 cleanup() {
   set +e
-  for d in run sys proc dev/pts dev; do umount -R "$MNT/$d" 2>/dev/null || true; done
+  for d in run sys proc dev; do umount -R "$MNT/$d" 2>/dev/null || true; done
   umount "$MNT/boot/efi" 2>/dev/null || true
   umount "$MNT" 2>/dev/null || true
 }
@@ -79,11 +87,12 @@ chroot "$MNT" /bin/bash -eux <<'CHROOT'
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y grub-efi-amd64 grub-efi-amd64-signed shim-signed efibootmgr
+
 mkdir -p /boot/efi/EFI/nexhash
 grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=nexhash --uefi-secure-boot --recheck
 update-grub
 
-# Also populate the standard removable-media fallback path for stubborn firmware.
+# Populate UEFI fallback path as a second way to boot on stubborn firmware.
 mkdir -p /boot/efi/EFI/BOOT
 if [[ -f /boot/efi/EFI/nexhash/shimx64.efi ]]; then
   cp -f /boot/efi/EFI/nexhash/shimx64.efi /boot/efi/EFI/BOOT/BOOTX64.EFI
