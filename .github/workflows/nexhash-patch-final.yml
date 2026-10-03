@@ -46,6 +46,7 @@ jobs:
 
           # BIOS menu.
           xorriso -osirrox on -indev "$SRC" -extract /isolinux/live.cfg work/live.cfg >/dev/null 2>&1
+          chmod 0644 work/live.cfg
           cat >> work/live.cfg <<'EOF_BIOS'
 
           label nexhash-install
@@ -58,6 +59,7 @@ jobs:
 
           # UEFI / GRUB menu.
           xorriso -osirrox on -indev "$SRC" -extract /boot/grub/grub.cfg work/grub.cfg >/dev/null 2>&1
+          chmod 0644 work/grub.cfg
           cat >> work/grub.cfg <<'EOF_GRUB'
 
           menuentry "Install NexHash EdgeOS" {
