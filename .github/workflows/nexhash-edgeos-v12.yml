@@ -95,7 +95,7 @@ jobs:
           ISO=out/NexHash-EdgeOS-1.2-Industrial-amd64.iso
           TAG=nexhash-edgeos-v1.2.0-industrial
           mkdir -p parts
-          split -b 700M -d -a 2 "$ISO" "parts/$(basename "$ISO").part"
+          split -b 500M -d -a 2 "$ISO" "parts/$(basename "$ISO").part"
           cp "$ISO.sha256" parts/
           cp out/BUILD-VALIDATED.txt parts/
           cat > parts/REASSEMBLE-NEXHASH-V12.cmd <<'CMD'
@@ -103,7 +103,7 @@ jobs:
           setlocal
           set ISO=NexHash-EdgeOS-1.2-Industrial-amd64.iso
           echo Recriando %ISO%...
-          copy /b "%ISO%.part00"+"%ISO%.part01"+"%ISO%.part02"+"%ISO%.part03" "%ISO%" 2>nul || copy /b "%ISO%.part00"+"%ISO%.part01"+"%ISO%.part02" "%ISO%"
+          copy /b "%ISO%.part00"+"%ISO%.part01"+"%ISO%.part02" "%ISO%"
           if errorlevel 1 (
             echo ERRO ao recriar a ISO.
             pause
