@@ -6,6 +6,7 @@ on:
       - nexhash-edgeos-v1.2-build
     paths:
       - '.github/workflows/nexhash-edgeos-v12.yml'
+      - 'nexhash-edgeos-v12/build.sh'
   workflow_dispatch:
 
 permissions:
