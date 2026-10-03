@@ -43,27 +43,26 @@ jobs:
           cd ..
           split -b 700M -d -a 2 "release/${ISO}" "parts/${ISO}.part"
           test "$(find parts -type f | wc -l)" -eq 3
-          cat > parts/REASSEMBLE-NEXHASH.cmd <<'CMD'
-@echo off
-setlocal
-set ISO=NexHash-EdgeOS-1.1-Industrial-amd64.iso
-echo Recriando %ISO%...
-copy /b "%ISO%.part00"+"%ISO%.part01"+"%ISO%.part02" "%ISO%"
-if errorlevel 1 (
-  echo ERRO ao recriar a ISO.
-  pause
-  exit /b 1
-)
-echo.
-echo SHA-256 esperado:
-type "%ISO%.sha256"
-echo.
-echo SHA-256 calculado:
-certutil -hashfile "%ISO%" SHA256
-echo.
-echo ISO pronta. Agora selecione este arquivo no Rufus.
-pause
-CMD
+          printf '%s\r\n' \
+            '@echo off' \
+            'setlocal' \
+            'set ISO=NexHash-EdgeOS-1.1-Industrial-amd64.iso' \
+            'echo Recriando %ISO%...' \
+            'copy /b "%ISO%.part00"+"%ISO%.part01"+"%ISO%.part02" "%ISO%"' \
+            'if errorlevel 1 (' \
+            '  echo ERRO ao recriar a ISO.' \
+            '  pause' \
+            '  exit /b 1' \
+            ')' \
+            'echo.' \
+            'echo SHA-256 esperado:' \
+            'type "%ISO%.sha256"' \
+            'echo.' \
+            'echo SHA-256 calculado:' \
+            'certutil -hashfile "%ISO%" SHA256' \
+            'echo.' \
+            'echo ISO pronta. Agora selecione este arquivo no Rufus.' \
+            'pause' > parts/REASSEMBLE-NEXHASH.cmd
           cp "release/${ISO}.sha256" parts/
           cp release/BUILD-VALIDATED.txt parts/
           ls -lh parts/
