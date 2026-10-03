@@ -91,39 +91,19 @@ jobs:
           live-config-systemd
           PKG
 
-          cat > config/includes.chroot/usr/share/backgrounds/nexhash/edgeos.svg <<'SVG'
+          # Wallpaper final generated in Higgsfield for NexHash EdgeOS.
+          HIGGS_WALL="https://d8j0ntlcm91z4.cloudfront.net/user_3JpqLrtojdNZKMbC1DzLsTTI5W4/hf_20261003_064117_34fa9205-4d82-4cee-98d5-70659906808a.png"
+          if ! curl -fL --retry 4 --retry-delay 2 "$HIGGS_WALL" -o config/includes.chroot/usr/share/backgrounds/nexhash/edgeos.png; then
+            cat > config/includes.chroot/usr/share/backgrounds/nexhash/edgeos.svg <<'SVG'
           <svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
             <defs>
-              <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0" stop-color="#071225"/>
-                <stop offset=".45" stop-color="#0b2346"/>
-                <stop offset="1" stop-color="#09101e"/>
-              </linearGradient>
-              <radialGradient id="r1" cx=".32" cy=".38" r=".55">
-                <stop offset="0" stop-color="#39a7ff" stop-opacity=".82"/>
-                <stop offset=".55" stop-color="#1264d8" stop-opacity=".28"/>
-                <stop offset="1" stop-color="#071225" stop-opacity="0"/>
-              </radialGradient>
-              <radialGradient id="r2" cx=".74" cy=".64" r=".50">
-                <stop offset="0" stop-color="#6ad7ff" stop-opacity=".55"/>
-                <stop offset=".65" stop-color="#1e6bff" stop-opacity=".14"/>
-                <stop offset="1" stop-color="#09101e" stop-opacity="0"/>
-              </radialGradient>
+              <linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#071225"/><stop offset="1" stop-color="#0b2346"/></linearGradient>
             </defs>
             <rect width="1920" height="1080" fill="url(#g)"/>
-            <ellipse cx="590" cy="410" rx="760" ry="620" fill="url(#r1)"/>
-            <ellipse cx="1430" cy="720" rx="650" ry="530" fill="url(#r2)"/>
-            <path d="M570 160 C820 260 920 450 1080 540 C1260 640 1470 620 1680 500" fill="none" stroke="#58baff" stroke-opacity=".16" stroke-width="90" stroke-linecap="round"/>
-            <path d="M350 820 C610 650 850 680 1020 790 C1190 900 1420 900 1630 770" fill="none" stroke="#0d6efd" stroke-opacity=".15" stroke-width="120" stroke-linecap="round"/>
-            <g opacity=".95">
-              <rect x="868" y="422" width="86" height="86" rx="10" fill="#f8fbff"/>
-              <rect x="966" y="422" width="86" height="86" rx="10" fill="#f8fbff"/>
-              <rect x="868" y="520" width="86" height="86" rx="10" fill="#f8fbff"/>
-              <rect x="966" y="520" width="86" height="86" rx="10" fill="#f8fbff"/>
-            </g>
-            <text x="960" y="690" text-anchor="middle" fill="#eaf5ff" font-family="sans-serif" font-size="42" font-weight="600">NexHash EdgeOS</text>
+            <path d="M250 760 C620 420 920 380 1640 260" fill="none" stroke="#2f9dff" stroke-opacity=".22" stroke-width="145" stroke-linecap="round"/>
           </svg>
           SVG
+          fi
 
           cat > config/includes.chroot/etc/skel/.config/kdeglobals <<'EOF'
           [General]
@@ -166,7 +146,7 @@ jobs:
           wallpaperplugin=org.kde.image
 
           [Containments][1][Configuration][General]
-          Image=file:///usr/share/backgrounds/nexhash/edgeos.svg
+          Image=file:///usr/share/backgrounds/nexhash/edgeos.png
           SlidePaths=/usr/share/wallpapers/
 
           [Containments][2]
@@ -234,7 +214,11 @@ jobs:
           if [ ! -f "$CFG" ]; then
             exit 0
           fi
-          WALL="file:///usr/share/backgrounds/nexhash/edgeos.svg"
+          if [ -f /usr/share/backgrounds/nexhash/edgeos.png ]; then
+            WALL="file:///usr/share/backgrounds/nexhash/edgeos.png"
+          else
+            WALL="file:///usr/share/backgrounds/nexhash/edgeos.svg"
+          fi
           sed -i "s#Image=.*#Image=$WALL#g" "$CFG" 2>/dev/null || true
           sed -i "s#wallpaperplugin=.*#wallpaperplugin=org.kde.image#g" "$CFG" 2>/dev/null || true
           EOF
