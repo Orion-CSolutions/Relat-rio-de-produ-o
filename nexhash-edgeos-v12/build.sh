@@ -56,7 +56,9 @@ mkdir -p \
   config/includes.chroot/usr/share/nexhash \
   config/includes.chroot/usr/share/keyrings \
   config/includes.chroot/etc/apt/sources.list.d \
+  config/includes.chroot/etc/apt/apt.conf.d \
   config/includes.chroot/etc/default/grub.d \
+  config/includes.chroot/etc/systemd/system \
   config/includes.chroot/opt/nexhash/releases \
   config/includes.chroot/var/lib/nexhash \
   config/includes.chroot/var/log/nexhash \
