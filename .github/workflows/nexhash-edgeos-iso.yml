@@ -26,12 +26,14 @@ jobs:
           docker system prune -af || true
           df -h
 
-      - name: Reconstruct validated builder
+      - name: Reconstruct and patch builder
         shell: bash
         run: |
           cat nexhash-edgeos/parts/part-* | base64 -d | gunzip > nexhash-edgeos/build_nexhash_edgeos.sh
           chmod +x nexhash-edgeos/build_nexhash_edgeos.sh
+          sed -i 's|install -d config/includes.chroot/etc/skel/Desktop config/includes.chroot/etc/skel/.config/autostart|install -d config/includes.chroot/etc/skel/Desktop config/includes.chroot/etc/skel/.config/autostart config/includes.chroot/etc/xdg/autostart|' nexhash-edgeos/build_nexhash_edgeos.sh
           bash -n nexhash-edgeos/build_nexhash_edgeos.sh
+          grep -n 'xdg/autostart' nexhash-edgeos/build_nexhash_edgeos.sh | head
           sha256sum nexhash-edgeos/build_nexhash_edgeos.sh
 
       - name: Build Debian 13 installable ISO
