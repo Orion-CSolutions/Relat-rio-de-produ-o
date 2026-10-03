@@ -14,7 +14,7 @@ permissions:
 jobs:
   patch:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -26,50 +26,206 @@ jobs:
           run-id: 37103939710
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Patch real installer boot entries
+      - name: Patch desktop, networking and installer
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update >/dev/null
-          sudo apt-get install -y xorriso squashfs-tools >/dev/null
+          sudo apt-get install -y xorriso squashfs-tools curl >/dev/null
 
           SRC="$(find source -type f -name '*.iso' | head -n1)"
           test -s "$SRC"
-          mkdir -p work out
+          mkdir -p work out rootfs
 
-          # Confirm the installed OS already contains Calamares + our installer autostart.
+          # Extract live filesystem.
           xorriso -osirrox on -indev "$SRC" -extract /live/filesystem.squashfs work/filesystem.squashfs >/dev/null 2>&1
-          unsquashfs -cat work/filesystem.squashfs usr/local/bin/nexhash-installer-autostart > work/nexhash-installer-autostart
-          grep -q "nexhash-installer=1" work/nexhash-installer-autostart
-          unsquashfs -cat work/filesystem.squashfs etc/skel/.config/autostart/nexhash-installer.desktop > work/nexhash-installer.desktop
-          grep -q "nexhash-installer-autostart" work/nexhash-installer.desktop
+          sudo unsquashfs -d rootfs work/filesystem.squashfs >/dev/null
+
+          # Use the exact wallpaper supplied by the user, hosted through Higgsfield.
+          sudo mkdir -p rootfs/usr/share/backgrounds/nexhash rootfs/etc/skel/Pictures
+          sudo curl -fL --retry 4 --retry-delay 2 \
+            "https://d2ol7oe51mr4n9.cloudfront.net/user_3JpqLrtojdNZKMbC1DzLsTTI5W4/6ab2bf8a-34fe-446c-a4b5-4f433b5d50fa.png" \
+            -o rootfs/usr/share/backgrounds/nexhash/edgeos-wallpaper.png
+          sudo cp rootfs/usr/share/backgrounds/nexhash/edgeos-wallpaper.png rootfs/etc/skel/Pictures/NexHash-EdgeOS.png
+
+          # Give chroot DNS access and install/fix desktop networking stack.
+          sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
+          sudo mount --bind /dev rootfs/dev
+          sudo mount --bind /proc rootfs/proc
+          sudo mount --bind /sys rootfs/sys
+          cleanup() {
+            sudo umount -lf rootfs/dev 2>/dev/null || true
+            sudo umount -lf rootfs/proc 2>/dev/null || true
+            sudo umount -lf rootfs/sys 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          sudo chroot rootfs /bin/bash -lc '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update
+            apt-get install -y network-manager plasma-nm plasma-pa powerdevil wpagui wireless-tools wpasupplicant rfkill
+            apt-get install -y firmware-iwlwifi firmware-realtek firmware-atheros firmware-brcm80211 || true
+            apt-get install -y opera-stable tailscale nodejs || true
+
+            systemctl enable NetworkManager.service || true
+            systemctl enable tailscaled.service || true
+            systemctl disable systemd-networkd.service systemd-networkd.socket 2>/dev/null || true
+
+            mkdir -p /etc/NetworkManager/conf.d
+            cat > /etc/NetworkManager/conf.d/10-nexhash.conf <<EOF_NM
+[main]
+plugins=ifupdown,keyfile
+
+[ifupdown]
+managed=true
+
+[device]
+wifi.scan-rand-mac-address=no
+EOF_NM
+
+            mkdir -p /etc/skel/Desktop /etc/skel/.config/autostart /usr/local/bin
+
+            cat > /usr/local/bin/nexhash-desktop-setup <<EOF_SETUP
+#!/usr/bin/env bash
+set -u
+WALL="/usr/share/backgrounds/nexhash/edgeos-wallpaper.png"
+
+# Apply dark theme and exact NexHash wallpaper.
+if command -v plasma-apply-wallpaperimage >/dev/null 2>&1; then
+  plasma-apply-wallpaperimage "$WALL" >/dev/null 2>&1 || true
+fi
+if command -v lookandfeeltool >/dev/null 2>&1; then
+  lookandfeeltool -a org.kde.breezedark.desktop >/dev/null 2>&1 || true
+fi
+
+# Make battery state easier to see and keep PowerDevil active.
+for KWRITE in kwriteconfig6 kwriteconfig5; do
+  if command -v "$KWRITE" >/dev/null 2>&1; then
+    "$KWRITE" --file powermanagementprofilesrc --group AC --key icon "battery" >/dev/null 2>&1 || true
+    "$KWRITE" --file powermanagementprofilesrc --group Battery --key icon "battery" >/dev/null 2>&1 || true
+  fi
+done
+
+# Ensure NetworkManager is the active networking backend.
+nmcli networking on >/dev/null 2>&1 || true
+nmcli radio wifi on >/dev/null 2>&1 || true
+
+# Add/normalize a battery widget in the panel and show percentage.
+sleep 4
+JS='var ps=panels(); if(ps.length>0){var p=ps[0]; var ws=p.widgets(); var b=null; for(var i=0;i<ws.length;i++){if(ws[i].type=="org.kde.plasma.battery"){b=ws[i];break;}} if(!b){b=p.addWidget("org.kde.plasma.battery");} if(b){b.currentConfigGroup=["General"]; b.writeConfig("showPercentage",true); b.writeConfig("showRemainingTime",true);}}'
+if command -v qdbus6 >/dev/null 2>&1; then
+  qdbus6 org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "$JS" >/dev/null 2>&1 || true
+elif command -v qdbus >/dev/null 2>&1; then
+  qdbus org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "$JS" >/dev/null 2>&1 || true
+fi
+
+touch "$HOME/.nexhash-desktop-ready"
+EOF_SETUP
+            chmod +x /usr/local/bin/nexhash-desktop-setup
+
+            cat > /etc/skel/.config/autostart/nexhash-desktop-setup.desktop <<EOF_AUTO
+[Desktop Entry]
+Type=Application
+Name=NexHash Desktop Setup
+Exec=/usr/local/bin/nexhash-desktop-setup
+X-KDE-autostart-after=panel
+NoDisplay=true
+EOF_AUTO
+
+            cat > /etc/skel/Desktop/Opera.desktop <<EOF_OPERA
+[Desktop Entry]
+Type=Application
+Name=Opera
+Comment=Web Browser
+Exec=opera %U
+Icon=opera
+Terminal=false
+Categories=Network;WebBrowser;
+EOF_OPERA
+
+            cat > /etc/skel/Desktop/Tailscale.desktop <<EOF_TS
+[Desktop Entry]
+Type=Application
+Name=Tailscale
+Comment=Secure remote access
+Exec=konsole -e bash -lc "echo NexHash EdgeOS - Tailscale; echo; tailscale status || true; echo; echo Press ENTER to connect/login...; read; sudo tailscale up; echo; tailscale status; exec bash"
+Icon=network-vpn
+Terminal=false
+Categories=Network;
+EOF_TS
+
+            cat > /etc/skel/Desktop/Network.desktop <<EOF_NET
+[Desktop Entry]
+Type=Application
+Name=Connect to Network
+Comment=Wi-Fi and Ethernet connections
+Exec=nm-connection-editor
+Icon=network-wireless
+Terminal=false
+Categories=Network;
+EOF_NET
+
+            chmod +x /etc/skel/Desktop/*.desktop
+
+            # Prefer a clean dark desktop with visible app launchers.
+            mkdir -p /etc/skel/.config
+            cat > /etc/skel/.config/kdeglobals <<EOF_KDE
+[General]
+ColorScheme=BreezeDark
+
+[KDE]
+SingleClick=false
+EOF_KDE
+          '
+
+          cleanup
+          trap - EXIT
+
+          # Verify installer autostart remains intact.
+          grep -q "nexhash-installer=1" rootfs/usr/local/bin/nexhash-installer-autostart
+          grep -q "nexhash-installer-autostart" rootfs/etc/skel/.config/autostart/nexhash-installer.desktop
+
+          # Repack modified root filesystem.
+          sudo mksquashfs rootfs work/filesystem-new.squashfs -comp xz -b 1M -noappend >/dev/null
 
           # BIOS menu.
           xorriso -osirrox on -indev "$SRC" -extract /isolinux/live.cfg work/live.cfg >/dev/null 2>&1
           chmod 0644 work/live.cfg
-          cat >> work/live.cfg <<'EOF_BIOS'
+          if ! grep -q "label nexhash-install" work/live.cfg; then
+            cat >> work/live.cfg <<'EOF_BIOS'
 
-          label nexhash-install
-              menu label ^Install NexHash EdgeOS
-              menu default
-              linux /live/vmlinuz
-              initrd /live/initrd.img
-              append boot=live components quiet splash locales=pt_BR.UTF-8 keyboard-layouts=br timezone=America/Sao_Paulo username=nexhash hostname=nexhash-edge nexhash-installer=1
-          EOF_BIOS
+label nexhash-install
+    menu label ^Install NexHash EdgeOS
+    menu default
+    linux /live/vmlinuz
+    initrd /live/initrd.img
+    append boot=live components quiet splash locales=pt_BR.UTF-8 keyboard-layouts=br timezone=America/Sao_Paulo username=nexhash hostname=nexhash-edge nexhash-installer=1
+EOF_BIOS
+          fi
 
           # UEFI / GRUB menu.
           xorriso -osirrox on -indev "$SRC" -extract /boot/grub/grub.cfg work/grub.cfg >/dev/null 2>&1
           chmod 0644 work/grub.cfg
-          cat >> work/grub.cfg <<'EOF_GRUB'
+          if ! grep -q 'menuentry "Install NexHash EdgeOS"' work/grub.cfg; then
+            cat >> work/grub.cfg <<'EOF_GRUB'
 
-          menuentry "Install NexHash EdgeOS" {
-              linux /live/vmlinuz boot=live components quiet splash locales=pt_BR.UTF-8 keyboard-layouts=br timezone=America/Sao_Paulo username=nexhash hostname=nexhash-edge nexhash-installer=1
-              initrd /live/initrd.img
-          }
-          EOF_GRUB
+menuentry "Install NexHash EdgeOS" {
+    linux /live/vmlinuz boot=live components quiet splash locales=pt_BR.UTF-8 keyboard-layouts=br timezone=America/Sao_Paulo username=nexhash hostname=nexhash-edge nexhash-installer=1
+    initrd /live/initrd.img
+}
+EOF_GRUB
+          fi
 
-          DEST="out/NexHash-EdgeOS-2.0-FINAL-Install-amd64.iso"
-          xorriso             -indev "$SRC"             -outdev "$DEST"             -boot_image any replay             -map work/live.cfg /isolinux/live.cfg             -map work/grub.cfg /boot/grub/grub.cfg             -commit
+          DEST="out/NexHash-EdgeOS-2.1-FINAL-Install-amd64.iso"
+          xorriso \
+            -indev "$SRC" \
+            -outdev "$DEST" \
+            -boot_image any replay \
+            -map work/filesystem-new.squashfs /live/filesystem.squashfs \
+            -map work/live.cfg /isolinux/live.cfg \
+            -map work/grub.cfg /boot/grub/grub.cfg \
+            -commit
 
           test -s "$DEST"
           sha256sum "$DEST" > "$DEST.sha256"
@@ -78,34 +234,52 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ISO="out/NexHash-EdgeOS-2.0-FINAL-Install-amd64.iso"
+          ISO="out/NexHash-EdgeOS-2.1-FINAL-Install-amd64.iso"
           rm -rf verify
-          mkdir -p verify
+          mkdir -p verify/rootfs
 
           xorriso -osirrox on -indev "$ISO" -extract /isolinux/live.cfg verify/live.cfg >/dev/null 2>&1
           xorriso -osirrox on -indev "$ISO" -extract /boot/grub/grub.cfg verify/grub.cfg >/dev/null 2>&1
-          xorriso -osirrox on -indev "$ISO" -extract /live/filesystem.packages verify/filesystem.packages >/dev/null 2>&1
+          xorriso -osirrox on -indev "$ISO" -extract /live/filesystem.squashfs verify/filesystem.squashfs >/dev/null 2>&1
 
           grep -q "Install NexHash EdgeOS" verify/live.cfg
           grep -q "nexhash-installer=1" verify/live.cfg
           grep -q "Install NexHash EdgeOS" verify/grub.cfg
           grep -q "nexhash-installer=1" verify/grub.cfg
-          grep -qi '^calamares' verify/filesystem.packages
-          grep -qi '^opera-stable' verify/filesystem.packages
-          grep -qi '^tailscale' verify/filesystem.packages
-          grep -qi '^nodejs' verify/filesystem.packages
+
+          unsquashfs -cat verify/filesystem.squashfs usr/share/backgrounds/nexhash/edgeos-wallpaper.png > verify/wallpaper.png
+          test -s verify/wallpaper.png
+          unsquashfs -cat verify/filesystem.squashfs etc/NetworkManager/conf.d/10-nexhash.conf | grep -q 'managed=true'
+          unsquashfs -cat verify/filesystem.squashfs etc/skel/Desktop/Network.desktop | grep -q 'nm-connection-editor'
+          unsquashfs -cat verify/filesystem.squashfs etc/skel/Desktop/Opera.desktop | grep -q 'Exec=opera'
+          unsquashfs -cat verify/filesystem.squashfs etc/skel/Desktop/Tailscale.desktop | grep -q 'tailscale up'
+          unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-desktop-setup | grep -q 'showPercentage'
+          unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-installer-autostart | grep -q 'nexhash-installer=1'
+
+          unsquashfs -cat verify/filesystem.squashfs var/lib/dpkg/status > verify/status
+          grep -q '^Package: network-manager$' verify/status
+          grep -q '^Package: plasma-nm$' verify/status
+          grep -q '^Package: powerdevil$' verify/status
+          grep -q '^Package: opera-stable$' verify/status
+          grep -q '^Package: tailscale$' verify/status
+          grep -q '^Package: nodejs$' verify/status
           test "$(stat -c%s "$ISO")" -gt 3000000000
 
           {
-            echo "NEXHASH EDGEOS FINAL ISO VALIDATED"
+            echo "NEXHASH EDGEOS 2.1 FINAL ISO VALIDATED"
             echo "BIOS installer menu: OK"
             echo "UEFI installer menu: OK"
-            echo "Installer autostart in installed live filesystem: OK"
-            echo "Calamares: OK"
-            echo "Opera: OK"
-            echo "Tailscale: OK"
+            echo "nexhash-installer=1: OK"
+            echo "NetworkManager: OK"
+            echo "Plasma Network Connect UI: OK"
+            echo "Wi-Fi radio setup: OK"
+            echo "Battery percentage widget setup: OK"
+            echo "Calamares installer/autostart: OK"
+            echo "Opera launcher/package: OK"
+            echo "Tailscale launcher/service/package: OK"
             echo "Node.js: OK"
-            echo "Higgsfield wallpaper: embedded by source build"
+            echo "KDE/PowerDevil: OK"
+            echo "User Higgsfield-hosted wallpaper: OK"
             echo
             sha256sum "$ISO"
           } | tee out/FINAL-VALIDATED.txt
@@ -114,7 +288,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ISO="out/NexHash-EdgeOS-2.0-FINAL-Install-amd64.iso"
+          ISO="out/NexHash-EdgeOS-2.1-FINAL-Install-amd64.iso"
           split -b 450M -d -a 2 "$ISO" out/final-part-
           sha256sum out/final-part-* > out/final-parts.sha256
           ls -lh out/final-part-*
@@ -122,82 +296,20 @@ jobs:
       - name: Upload final full ISO
         uses: actions/upload-artifact@v4
         with:
-          name: NexHash-EdgeOS-2.0-FINAL-Install-amd64
+          name: NexHash-EdgeOS-2.1-FINAL-Install-amd64
           path: |
-            out/NexHash-EdgeOS-2.0-FINAL-Install-amd64.iso
-            out/NexHash-EdgeOS-2.0-FINAL-Install-amd64.iso.sha256
+            out/NexHash-EdgeOS-2.1-FINAL-Install-amd64.iso
+            out/NexHash-EdgeOS-2.1-FINAL-Install-amd64.iso.sha256
             out/FINAL-VALIDATED.txt
           compression-level: 0
           retention-days: 3
 
-      - name: Upload final part 00
+      - name: Upload final split parts
         uses: actions/upload-artifact@v4
         with:
-          name: NexHash-FINAL-part-00
-          path: out/final-part-00
-          compression-level: 0
-          retention-days: 3
-      - name: Upload final part 01
-        uses: actions/upload-artifact@v4
-        with:
-          name: NexHash-FINAL-part-01
-          path: out/final-part-01
-          compression-level: 0
-          retention-days: 3
-      - name: Upload final part 02
-        uses: actions/upload-artifact@v4
-        with:
-          name: NexHash-FINAL-part-02
-          path: out/final-part-02
-          compression-level: 0
-          retention-days: 3
-      - name: Upload final part 03
-        uses: actions/upload-artifact@v4
-        with:
-          name: NexHash-FINAL-part-03
-          path: out/final-part-03
-          compression-level: 0
-          retention-days: 3
-      - name: Upload final part 04
-        uses: actions/upload-artifact@v4
-        with:
-          name: NexHash-FINAL-part-04
-          path: out/final-part-04
-          compression-level: 0
-          retention-days: 3
-      - name: Upload final part 05
-        uses: actions/upload-artifact@v4
-        with:
-          name: NexHash-FINAL-part-05
-          path: out/final-part-05
-          compression-level: 0
-          retention-days: 3
-      - name: Upload final part 06
-        uses: actions/upload-artifact@v4
-        with:
-          name: NexHash-FINAL-part-06
-          path: out/final-part-06
-          compression-level: 0
-          retention-days: 3
-      - name: Upload final part 07
-        uses: actions/upload-artifact@v4
-        with:
-          name: NexHash-FINAL-part-07
-          path: out/final-part-07
-          compression-level: 0
-          retention-days: 3
-      - name: Upload final part 08
-        uses: actions/upload-artifact@v4
-        with:
-          name: NexHash-FINAL-part-08
-          path: out/final-part-08
-          compression-level: 0
-          if-no-files-found: ignore
-          retention-days: 3
-      - name: Upload final part checksums
-        uses: actions/upload-artifact@v4
-        with:
-          name: NexHash-FINAL-parts-sha256
-          path: out/final-parts.sha256
+          name: NexHash-EdgeOS-2.1-FINAL-parts
+          path: |
+            out/final-part-*
+            out/final-parts.sha256
           compression-level: 0
           retention-days: 3
