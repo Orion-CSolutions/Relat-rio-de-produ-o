@@ -35,6 +35,19 @@ sudo tee rootfs/tmp/nexhash-v21-rootfs.sh >/dev/null <<'ROOTFS_SCRIPT'
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
+# Remove the live-media APT source. It only exists while booted from the ISO
+# and breaks apt inside the extracted filesystem during CI.
+cat > /etc/apt/sources.list <<'EOF_APT'
+deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware
+deb http://security.debian.org/debian-security trixie-security main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian trixie-updates main contrib non-free non-free-firmware
+EOF_APT
+if [ -d /etc/apt/sources.list.d ]; then
+  while IFS= read -r src; do
+    mv "$src" "$src.disabled"
+  done < <(grep -rl 'file:/run/live/medium' /etc/apt/sources.list.d 2>/dev/null || true)
+fi
+
 # Ensure the KDE/NetworkManager connection UI exists.
 apt-get update
 apt-get install -y network-manager plasma-nm plasma-pa powerdevil wpasupplicant rfkill
