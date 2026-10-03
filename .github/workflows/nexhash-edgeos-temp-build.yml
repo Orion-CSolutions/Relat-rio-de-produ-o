@@ -47,6 +47,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          sudo chown -R "$(id -u):$(id -g)" out
           test -s out/NexHash-EdgeOS-1.1-Industrial-amd64.iso
           test -s out/NexHash-EdgeOS-1.1-Industrial-amd64.iso.sha256
           test -s out/BUILD-VALIDATED.txt
