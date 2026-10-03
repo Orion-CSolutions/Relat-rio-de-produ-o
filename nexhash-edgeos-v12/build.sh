@@ -753,88 +753,29 @@ file "$FINAL" | tee "$OUT/iso-file.txt"
 xorriso -indev "$FINAL" -report_el_torito plain -report_system_area plain 2>&1 | tee "$OUT/boot-report.txt"
 grep -Eqi 'El Torito|EFI|BIOS|MBR|GPT' "$OUT/boot-report.txt"
 
-# Extract squashfs and prove the two external applications are INSIDE the final ISO.
-mkdir -p "$OUT/extract"
+# Extract squashfs and validate package state INSIDE the final ISO.
 xorriso -osirrox on -indev "$FINAL" -extract /live/filesystem.squashfs "$OUT/filesystem.squashfs" >/dev/null 2>&1
-unsquashfs -ll "$OUT/filesystem.squashfs" > "$OUT/filesystem-list.txt"
-echo "Validating Opera..."
-grep -Eq '/usr/bin/opera$|/usr/bin/opera-stable
-# BIOS smoke boot.
-set +e
-timeout 25s qemu-system-x86_64 -m 1536 -smp 2 -cdrom "$FINAL" -boot d -display none -serial stdio -no-reboot > "$OUT/qemu-bios.log" 2>&1
-QRC=$?
-set -e
-[ "$QRC" -eq 0 ] || [ "$QRC" -eq 124 ]
+unsquashfs -cat "$OUT/filesystem.squashfs" var/lib/dpkg/status > "$OUT/dpkg-status.txt"
 
-cat > "$OUT/BUILD-VALIDATED.txt" <<EOF
-NexHash EdgeOS 1.2 ISO validated.
-Opera embedded: yes
-Tailscale embedded: yes
-Wi-Fi stack embedded: yes
-Signed UEFI stack embedded: yes
-BIOS smoke rc=$QRC
-EOF
-cat "$OUT/BUILD-VALIDATED.txt"
- "$OUT/filesystem-list.txt"
-echo "Validating Tailscale..."
-grep -Eq '/usr/bin/tailscale
-# BIOS smoke boot.
-set +e
-timeout 25s qemu-system-x86_64 -m 1536 -smp 2 -cdrom "$FINAL" -boot d -display none -serial stdio -no-reboot > "$OUT/qemu-bios.log" 2>&1
-QRC=$?
-set -e
-[ "$QRC" -eq 0 ] || [ "$QRC" -eq 124 ]
+check_pkg() {
+  local pkg="$1"
+  echo "Validating package: $pkg"
+  awk -v p="$pkg" '
+    BEGIN { RS=""; ok=0 }
+    $0 ~ ("(^|\\n)Package: " p "(\\n|$)") && $0 ~ "(^|\\n)Status: install ok installed(\\n|$)" { ok=1 }
+    END { exit ok ? 0 : 1 }
+  ' "$OUT/dpkg-status.txt"
+}
 
-cat > "$OUT/BUILD-VALIDATED.txt" <<EOF
-NexHash EdgeOS 1.2 ISO validated.
-Opera embedded: yes
-Tailscale embedded: yes
-Wi-Fi stack embedded: yes
-Signed UEFI stack embedded: yes
-BIOS smoke rc=$QRC
-EOF
-cat "$OUT/BUILD-VALIDATED.txt"
- "$OUT/filesystem-list.txt"
-echo "Validating NetworkManager applet..."
-grep -Eq '/usr/bin/nm-applet
-# BIOS smoke boot.
-set +e
-timeout 25s qemu-system-x86_64 -m 1536 -smp 2 -cdrom "$FINAL" -boot d -display none -serial stdio -no-reboot > "$OUT/qemu-bios.log" 2>&1
-QRC=$?
-set -e
-[ "$QRC" -eq 0 ] || [ "$QRC" -eq 124 ]
-
-cat > "$OUT/BUILD-VALIDATED.txt" <<EOF
-NexHash EdgeOS 1.2 ISO validated.
-Opera embedded: yes
-Tailscale embedded: yes
-Wi-Fi stack embedded: yes
-Signed UEFI stack embedded: yes
-BIOS smoke rc=$QRC
-EOF
-cat "$OUT/BUILD-VALIDATED.txt"
- "$OUT/filesystem-list.txt"
-echo "Validating rfkill..."
-grep -Eq '/usr/(bin|sbin)/rfkill
-# BIOS smoke boot.
-set +e
-timeout 25s qemu-system-x86_64 -m 1536 -smp 2 -cdrom "$FINAL" -boot d -display none -serial stdio -no-reboot > "$OUT/qemu-bios.log" 2>&1
-QRC=$?
-set -e
-[ "$QRC" -eq 0 ] || [ "$QRC" -eq 124 ]
-
-cat > "$OUT/BUILD-VALIDATED.txt" <<EOF
-NexHash EdgeOS 1.2 ISO validated.
-Opera embedded: yes
-Tailscale embedded: yes
-Wi-Fi stack embedded: yes
-Signed UEFI stack embedded: yes
-BIOS smoke rc=$QRC
-EOF
-cat "$OUT/BUILD-VALIDATED.txt"
- "$OUT/filesystem-list.txt"
-echo "Validating signed UEFI stack..."
-grep -Eqi 'shimx64|/usr/lib/.*/shim|grub.*signed|grub-efi' "$OUT/filesystem-list.txt"
+check_pkg opera-stable
+check_pkg tailscale
+check_pkg network-manager-gnome
+check_pkg wpasupplicant
+check_pkg rfkill
+check_pkg firmware-iwlwifi
+check_pkg firmware-realtek
+check_pkg shim-signed
+check_pkg grub-efi-amd64-signed
 
 # BIOS smoke boot.
 set +e
