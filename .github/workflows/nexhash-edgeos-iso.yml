@@ -1,0 +1,60 @@
+name: Build NexHash EdgeOS ISO
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "nexhash-edgeos/**"
+      - ".github/workflows/nexhash-edgeos-iso.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-iso:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout build branch
+        uses: actions/checkout@v4
+
+      - name: Free runner disk space
+        shell: bash
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          docker system prune -af || true
+          df -h
+
+      - name: Reconstruct validated builder
+        shell: bash
+        run: |
+          cat nexhash-edgeos/parts/part-* | base64 -d | gunzip > nexhash-edgeos/build_nexhash_edgeos.sh
+          chmod +x nexhash-edgeos/build_nexhash_edgeos.sh
+          bash -n nexhash-edgeos/build_nexhash_edgeos.sh
+          sha256sum nexhash-edgeos/build_nexhash_edgeos.sh
+
+      - name: Build Debian 13 installable ISO
+        shell: bash
+        run: |
+          sudo docker pull debian:13
+          sudo docker run --rm --privileged --network host             -v "$GITHUB_WORKSPACE:/work"             -w /work/nexhash-edgeos             debian:13             bash -lc 'bash ./build_nexhash_edgeos.sh'
+
+      - name: Verify final artifacts
+        shell: bash
+        run: |
+          test -s nexhash-edgeos/NexHash-EdgeOS-2.0-Desktop-amd64.iso
+          test -s nexhash-edgeos/NexHash-EdgeOS-2.0-Desktop-amd64.iso.sha256
+          cat nexhash-edgeos/NexHash-EdgeOS-2.0-Desktop-amd64.iso.sha256
+          ls -lh nexhash-edgeos/NexHash-EdgeOS-2.0-Desktop-amd64.iso*
+
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-EdgeOS-2.0-Desktop-amd64
+          path: |
+            nexhash-edgeos/NexHash-EdgeOS-2.0-Desktop-amd64.iso
+            nexhash-edgeos/NexHash-EdgeOS-2.0-Desktop-amd64.iso.sha256
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
