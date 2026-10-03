@@ -32,6 +32,7 @@ jobs:
             -w /work \
             debian:13 \
             bash -lc 'bash nexhash-edgeos-v12/build.sh'
+          sudo chown -R "$(id -u):$(id -g)" out
 
       - name: Verify final image
         shell: bash
