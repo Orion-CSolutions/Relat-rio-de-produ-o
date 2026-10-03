@@ -3,8 +3,6 @@ name: Patch Final NexHash EdgeOS ISO
 on:
   push:
     branches: [main]
-    paths:
-      - '.github/workflows/nexhash-patch-final.yml'
   workflow_dispatch:
 
 permissions:
@@ -60,124 +58,127 @@ jobs:
           }
           trap cleanup EXIT
 
-          sudo chroot rootfs /bin/bash -lc '
-            set -e
-            export DEBIAN_FRONTEND=noninteractive
-            apt-get update
-            apt-get install -y network-manager plasma-nm plasma-pa powerdevil wpagui wireless-tools wpasupplicant rfkill
-            apt-get install -y firmware-iwlwifi firmware-realtek firmware-atheros firmware-brcm80211 || true
-            apt-get install -y opera-stable tailscale nodejs || true
-
-            systemctl enable NetworkManager.service || true
-            systemctl enable tailscaled.service || true
-            systemctl disable systemd-networkd.service systemd-networkd.socket 2>/dev/null || true
-
-            mkdir -p /etc/NetworkManager/conf.d
-            cat > /etc/NetworkManager/conf.d/10-nexhash.conf <<EOF_NM
-[main]
-plugins=ifupdown,keyfile
-
-[ifupdown]
-managed=true
-
-[device]
-wifi.scan-rand-mac-address=no
-EOF_NM
-
-            mkdir -p /etc/skel/Desktop /etc/skel/.config/autostart /usr/local/bin
-
-            cat > /usr/local/bin/nexhash-desktop-setup <<EOF_SETUP
-#!/usr/bin/env bash
-set -u
-WALL="/usr/share/backgrounds/nexhash/edgeos-wallpaper.png"
-
-# Apply dark theme and exact NexHash wallpaper.
-if command -v plasma-apply-wallpaperimage >/dev/null 2>&1; then
-  plasma-apply-wallpaperimage "$WALL" >/dev/null 2>&1 || true
-fi
-if command -v lookandfeeltool >/dev/null 2>&1; then
-  lookandfeeltool -a org.kde.breezedark.desktop >/dev/null 2>&1 || true
-fi
-
-# Make battery state easier to see and keep PowerDevil active.
-for KWRITE in kwriteconfig6 kwriteconfig5; do
-  if command -v "$KWRITE" >/dev/null 2>&1; then
-    "$KWRITE" --file powermanagementprofilesrc --group AC --key icon "battery" >/dev/null 2>&1 || true
-    "$KWRITE" --file powermanagementprofilesrc --group Battery --key icon "battery" >/dev/null 2>&1 || true
-  fi
-done
-
-# Ensure NetworkManager is the active networking backend.
-nmcli networking on >/dev/null 2>&1 || true
-nmcli radio wifi on >/dev/null 2>&1 || true
-
-# Add/normalize a battery widget in the panel and show percentage.
-sleep 4
-JS='var ps=panels(); if(ps.length>0){var p=ps[0]; var ws=p.widgets(); var b=null; for(var i=0;i<ws.length;i++){if(ws[i].type=="org.kde.plasma.battery"){b=ws[i];break;}} if(!b){b=p.addWidget("org.kde.plasma.battery");} if(b){b.currentConfigGroup=["General"]; b.writeConfig("showPercentage",true); b.writeConfig("showRemainingTime",true);}}'
-if command -v qdbus6 >/dev/null 2>&1; then
-  qdbus6 org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "$JS" >/dev/null 2>&1 || true
-elif command -v qdbus >/dev/null 2>&1; then
-  qdbus org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "$JS" >/dev/null 2>&1 || true
-fi
-
-touch "$HOME/.nexhash-desktop-ready"
-EOF_SETUP
-            chmod +x /usr/local/bin/nexhash-desktop-setup
-
-            cat > /etc/skel/.config/autostart/nexhash-desktop-setup.desktop <<EOF_AUTO
-[Desktop Entry]
-Type=Application
-Name=NexHash Desktop Setup
-Exec=/usr/local/bin/nexhash-desktop-setup
-X-KDE-autostart-after=panel
-NoDisplay=true
-EOF_AUTO
-
-            cat > /etc/skel/Desktop/Opera.desktop <<EOF_OPERA
-[Desktop Entry]
-Type=Application
-Name=Opera
-Comment=Web Browser
-Exec=opera %U
-Icon=opera
-Terminal=false
-Categories=Network;WebBrowser;
-EOF_OPERA
-
-            cat > /etc/skel/Desktop/Tailscale.desktop <<EOF_TS
-[Desktop Entry]
-Type=Application
-Name=Tailscale
-Comment=Secure remote access
-Exec=konsole -e bash -lc "echo NexHash EdgeOS - Tailscale; echo; tailscale status || true; echo; echo Press ENTER to connect/login...; read; sudo tailscale up; echo; tailscale status; exec bash"
-Icon=network-vpn
-Terminal=false
-Categories=Network;
-EOF_TS
-
-            cat > /etc/skel/Desktop/Network.desktop <<EOF_NET
-[Desktop Entry]
-Type=Application
-Name=Connect to Network
-Comment=Wi-Fi and Ethernet connections
-Exec=nm-connection-editor
-Icon=network-wireless
-Terminal=false
-Categories=Network;
-EOF_NET
-
-            chmod +x /etc/skel/Desktop/*.desktop
-
-            # Prefer a clean dark desktop with visible app launchers.
-            mkdir -p /etc/skel/.config
-            cat > /etc/skel/.config/kdeglobals <<EOF_KDE
-[General]
-ColorScheme=BreezeDark
-
-[KDE]
-SingleClick=false
-EOF_KDE
-          '
+          sudo tee rootfs/tmp/nexhash-rootfs-patch.sh >/dev/null <<'CHROOT_SCRIPT'
+          set -e
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y network-manager plasma-nm plasma-pa powerdevil wpagui wireless-tools wpasupplicant rfkill
+          apt-get install -y firmware-iwlwifi firmware-realtek firmware-atheros firmware-brcm80211 || true
+          apt-get install -y opera-stable tailscale nodejs || true
+          
+          systemctl enable NetworkManager.service || true
+          systemctl enable tailscaled.service || true
+          systemctl disable systemd-networkd.service systemd-networkd.socket 2>/dev/null || true
+          
+          mkdir -p /etc/NetworkManager/conf.d
+          cat > /etc/NetworkManager/conf.d/10-nexhash.conf <<EOF_NM
+          [main]
+          plugins=ifupdown,keyfile
+          
+          [ifupdown]
+          managed=true
+          
+          [device]
+          wifi.scan-rand-mac-address=no
+          EOF_NM
+          
+          mkdir -p /etc/skel/Desktop /etc/skel/.config/autostart /usr/local/bin
+          
+          cat > /usr/local/bin/nexhash-desktop-setup <<EOF_SETUP
+          #!/usr/bin/env bash
+          set -u
+          WALL="/usr/share/backgrounds/nexhash/edgeos-wallpaper.png"
+          
+          # Apply dark theme and exact NexHash wallpaper.
+          if command -v plasma-apply-wallpaperimage >/dev/null 2>&1; then
+            plasma-apply-wallpaperimage "$WALL" >/dev/null 2>&1 || true
+          fi
+          if command -v lookandfeeltool >/dev/null 2>&1; then
+            lookandfeeltool -a org.kde.breezedark.desktop >/dev/null 2>&1 || true
+          fi
+          
+          # Make battery state easier to see and keep PowerDevil active.
+          for KWRITE in kwriteconfig6 kwriteconfig5; do
+            if command -v "$KWRITE" >/dev/null 2>&1; then
+              "$KWRITE" --file powermanagementprofilesrc --group AC --key icon "battery" >/dev/null 2>&1 || true
+              "$KWRITE" --file powermanagementprofilesrc --group Battery --key icon "battery" >/dev/null 2>&1 || true
+            fi
+          done
+          
+          # Ensure NetworkManager is the active networking backend.
+          nmcli networking on >/dev/null 2>&1 || true
+          nmcli radio wifi on >/dev/null 2>&1 || true
+          
+          # Add/normalize a battery widget in the panel and show percentage.
+          sleep 4
+          JS='var ps=panels(); if(ps.length>0){var p=ps[0]; var ws=p.widgets(); var b=null; for(var i=0;i<ws.length;i++){if(ws[i].type=="org.kde.plasma.battery"){b=ws[i];break;}} if(!b){b=p.addWidget("org.kde.plasma.battery");} if(b){b.currentConfigGroup=["General"]; b.writeConfig("showPercentage",true); b.writeConfig("showRemainingTime",true);}}'
+          if command -v qdbus6 >/dev/null 2>&1; then
+            qdbus6 org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "$JS" >/dev/null 2>&1 || true
+          elif command -v qdbus >/dev/null 2>&1; then
+            qdbus org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "$JS" >/dev/null 2>&1 || true
+          fi
+          
+          touch "$HOME/.nexhash-desktop-ready"
+          EOF_SETUP
+          chmod +x /usr/local/bin/nexhash-desktop-setup
+          
+          cat > /etc/skel/.config/autostart/nexhash-desktop-setup.desktop <<EOF_AUTO
+          [Desktop Entry]
+          Type=Application
+          Name=NexHash Desktop Setup
+          Exec=/usr/local/bin/nexhash-desktop-setup
+          X-KDE-autostart-after=panel
+          NoDisplay=true
+          EOF_AUTO
+          
+          cat > /etc/skel/Desktop/Opera.desktop <<EOF_OPERA
+          [Desktop Entry]
+          Type=Application
+          Name=Opera
+          Comment=Web Browser
+          Exec=opera %U
+          Icon=opera
+          Terminal=false
+          Categories=Network;WebBrowser;
+          EOF_OPERA
+          
+          cat > /etc/skel/Desktop/Tailscale.desktop <<EOF_TS
+          [Desktop Entry]
+          Type=Application
+          Name=Tailscale
+          Comment=Secure remote access
+          Exec=konsole -e bash -lc "echo NexHash EdgeOS - Tailscale; echo; tailscale status || true; echo; echo Press ENTER to connect/login...; read; sudo tailscale up; echo; tailscale status; exec bash"
+          Icon=network-vpn
+          Terminal=false
+          Categories=Network;
+          EOF_TS
+          
+          cat > /etc/skel/Desktop/Network.desktop <<EOF_NET
+          [Desktop Entry]
+          Type=Application
+          Name=Connect to Network
+          Comment=Wi-Fi and Ethernet connections
+          Exec=nm-connection-editor
+          Icon=network-wireless
+          Terminal=false
+          Categories=Network;
+          EOF_NET
+          
+          chmod +x /etc/skel/Desktop/*.desktop
+          
+          # Prefer a clean dark desktop with visible app launchers.
+          mkdir -p /etc/skel/.config
+          cat > /etc/skel/.config/kdeglobals <<EOF_KDE
+          [General]
+          ColorScheme=BreezeDark
+          
+          [KDE]
+          SingleClick=false
+          EOF_KDE
+          CHROOT_SCRIPT
+          sudo chmod +x rootfs/tmp/nexhash-rootfs-patch.sh
+          sudo chroot rootfs /bin/bash /tmp/nexhash-rootfs-patch.sh
+          sudo rm -f rootfs/tmp/nexhash-rootfs-patch.sh
 
           cleanup
           trap - EXIT
