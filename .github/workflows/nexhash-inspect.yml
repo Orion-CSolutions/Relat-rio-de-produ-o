@@ -1,0 +1,63 @@
+name: Inspect NexHash EdgeOS ISO
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/nexhash-inspect.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download built ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: NexHash-EdgeOS-2.0-Install-amd64
+          path: artifact
+          run-id: 37103939710
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Inspect ISO boot and packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y xorriso >/dev/null
+
+          ISO="$(find artifact -type f -name '*.iso' | head -n1)"
+          test -s "$ISO"
+          echo "ISO=$ISO"
+          ls -lh "$ISO"
+          sha256sum "$ISO"
+
+          echo "===== LIVE ROOT ====="
+          xorriso -indev "$ISO" -find /live -maxdepth 1 -exec lsdl 2>/dev/null || true
+
+          rm -rf /tmp/isox
+          mkdir -p /tmp/isox
+          xorriso -osirrox on -indev "$ISO"             -extract /isolinux /tmp/isox/isolinux             -extract /boot /tmp/isox/boot             -extract /EFI /tmp/isox/EFI             -extract /live /tmp/isox/live >/tmp/xorriso-extract.log 2>&1 || true
+
+          echo "===== INSTALL MENU MATCHES ====="
+          grep -Rni "Install NexHash EdgeOS" /tmp/isox/isolinux /tmp/isox/boot /tmp/isox/EFI || true
+
+          echo "===== NEXHASH INSTALLER PARAM MATCHES ====="
+          grep -Rni "nexhash-installer=1" /tmp/isox/isolinux /tmp/isox/boot /tmp/isox/EFI || true
+
+          echo "===== LIVE FILES ====="
+          find /tmp/isox/live -maxdepth 1 -type f -printf '%f\n' | sort
+
+          echo "===== MANIFEST PACKAGE MATCHES ====="
+          MANIFEST="$(find /tmp/isox/live -maxdepth 1 -type f \( -name '*filesystem*.packages*' -o -name 'filesystem.packages' \) | head -n1 || true)"
+          echo "MANIFEST=$MANIFEST"
+          if [ -n "$MANIFEST" ]; then
+            grep -Ei '^(calamares|opera-stable|tailscale|nodejs|plasma|powerdevil|network-manager)' "$MANIFEST" | head -n 100 || true
+          fi
