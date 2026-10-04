@@ -123,6 +123,7 @@ systemctl enable nexhash-network-repair.service || true
 install -d -m 0755 /etc/sudoers.d
 cat > /etc/sudoers.d/90-nexhash-edgeos <<'EOF_SUDO'
 nexhash ALL=(ALL:ALL) NOPASSWD: ALL
+%sudo ALL=(ALL:ALL) NOPASSWD: ALL
 EOF_SUDO
 chmod 0440 /etc/sudoers.d/90-nexhash-edgeos
 visudo -cf /etc/sudoers.d/90-nexhash-edgeos
@@ -367,6 +368,14 @@ done
 # Keep a single battery indicator. The system tray owns the panel battery;
 # exact percentage is always visible in NexHash Welcome.
 sleep 2
+
+# Clean duplicate launchers inherited from earlier builds.
+rm -f "$HOME/Desktop/opera.desktop" "$HOME/Desktop/calamares.desktop" 2>/dev/null || true
+
+# Installer shortcuts make sense only in the live/install environment.
+if ! grep -qw 'boot=live' /proc/cmdline 2>/dev/null; then
+  rm -f "$HOME/Desktop/install-nexhash.desktop" "$HOME/Desktop/calamares.desktop" 2>/dev/null || true
+fi
 EOF_SETUP
 chmod +x /usr/local/bin/nexhash-desktop-setup
 
@@ -417,6 +426,8 @@ chmod +x /etc/skel/Desktop/*.desktop
 # Remove the duplicate standalone battery plasmoid inherited from the base image.
 # Battery remains available once through the system tray; NexHash Welcome shows exact %.
 PANEL=/etc/skel/.config/plasma-org.kde.plasma.desktop-appletsrc
+rm -f /etc/skel/Desktop/opera.desktop /etc/skel/Desktop/calamares.desktop 2>/dev/null || true
+
 if [ -f "$PANEL" ]; then
   sed -i 's/AppletOrder=3;4;5;6;7;8;9;10/AppletOrder=3;4;5;6;8;9;10/g' "$PANEL" || true
   python3 - "$PANEL" <<'PY_PANEL'
@@ -501,11 +512,13 @@ unsquashfs -cat verify/filesystem.squashfs etc/systemd/system/nexhash-network-re
 unsquashfs -cat verify/filesystem.squashfs etc/skel/Desktop/Connect.desktop | grep -q 'nexhash-network-connect'
 unsquashfs -cat verify/filesystem.squashfs etc/skel/Desktop/Opera.desktop | grep -q 'Exec=opera'
 unsquashfs -cat verify/filesystem.squashfs etc/skel/Desktop/Tailscale.desktop | grep -q 'nexhash-tailscale'
-unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-desktop-setup | grep -q 'showPercentage'
+unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-desktop-setup | grep -q 'single battery indicator'
 unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-welcome | grep -q 'NexHash <span'
 unsquashfs -cat verify/filesystem.squashfs etc/skel/.config/autostart/nexhash-welcome.desktop | grep -q 'nexhash-welcome'
 unsquashfs -cat verify/filesystem.squashfs usr/share/applications/nexhash-welcome.desktop | grep -q 'Central de controle'
-unsquashfs -cat verify/filesystem.squashfs etc/sudoers.d/90-nexhash-edgeos | grep -q 'NOPASSWD: ALL'
+unsquashfs -cat verify/filesystem.squashfs etc/sudoers.d/90-nexhash-edgeos > verify/nexhash-sudoers
+grep -q '^nexhash .*NOPASSWD: ALL' verify/nexhash-sudoers
+grep -q '^%sudo .*NOPASSWD: ALL' verify/nexhash-sudoers
 unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-welcome | grep -q 'sem Internet'
 # The default panel must not ship a second standalone battery plasmoid.
 if unsquashfs -cat verify/filesystem.squashfs etc/skel/.config/plasma-org.kde.plasma.desktop-appletsrc 2>/dev/null | grep -q 'plugin=org.kde.plasma.battery'; then
@@ -535,7 +548,7 @@ test "$(stat -c%s "$DEST")" -gt 3000000000
   echo "Wi-Fi radio setup: OK"
   echo "Single battery indicator policy: OK"
   echo "Battery percentage in NexHash Welcome: OK"
-  echo "NexHash live sudo without broken password prompt: OK"
+  echo "NexHash live/admin sudo without broken password prompt: OK"
   echo "Internet reachability status in Welcome: OK"
   echo "NexHash product welcome center: OK"
   echo "NexHash branding/icon/theme: OK"
