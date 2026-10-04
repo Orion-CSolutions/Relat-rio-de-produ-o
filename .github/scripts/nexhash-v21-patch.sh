@@ -199,7 +199,6 @@ EOF_NHSVC
 systemctl enable nexhash.service || true
 
 # Default ASIC recovery policy: conservative by design.
-cat > /etc/nexhash/recovery.json <<'EOF_RECOVERY_CFG'
 {
   "enabled": true,
   "poll_seconds": 30,
@@ -222,11 +221,9 @@ cat > /etc/nexhash/recovery.json <<'EOF_RECOVERY_CFG'
 }
 EOF_RECOVERY_CFG
 
-cat > /usr/local/bin/nexhash-asic-recovery <<'PY_RECOVERY'
 #!/usr/bin/env python3
 import json, os, time, urllib.request, urllib.error, datetime
 
-CFG="/etc/nexhash/recovery.json"
 STATE="/var/lib/nexhash/asic-recovery-state.json"
 LOG="/var/log/nexhash/asic-recovery.log"
 
@@ -391,10 +388,7 @@ while True:
     save_json(STATE,state)
     time.sleep(poll)
 PY_RECOVERY
-chmod +x /usr/local/bin/nexhash-asic-recovery
-python3 -m py_compile /usr/local/bin/nexhash-asic-recovery
 
-cat > /etc/systemd/system/nexhash-asic-recovery.service <<'EOF_RECOVERY_SVC'
 [Unit]
 Description=NexHash ASIC Automatic Recovery
 After=nexhash.service network-online.target
@@ -402,7 +396,6 @@ Wants=nexhash.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/nexhash-asic-recovery
 Restart=always
 RestartSec=10
 Nice=5
@@ -410,7 +403,6 @@ Nice=5
 [Install]
 WantedBy=multi-user.target
 EOF_RECOVERY_SVC
-systemctl enable nexhash-asic-recovery.service || true
 
 # Open NexHash automatically in Opera after desktop login, but don't block boot.
 cat > /usr/local/bin/nexhash-open-dashboard <<'EOF_OPEN'
@@ -425,7 +417,6 @@ exit 0
 EOF_OPEN
 chmod +x /usr/local/bin/nexhash-open-dashboard
 
-cat > /etc/skel/.config/autostart/nexhash-dashboard.desktop <<'EOF_OPEN_DESK'
 [Desktop Entry]
 Type=Application
 Name=NexHash Dashboard
@@ -865,6 +856,9 @@ fi
 echo "[3b/7] Installing NexHash appliance/server/watchdog layer..."
 sudo bash .github/scripts/nexhash-v25-appliance.sh rootfs
 
+# Remove temporary duplicate recovery service from earlier prototype layer.
+# The canonical service is nexhash-asic-watchdog.service from v25 appliance.
+
 # Ensure core runtime dependencies for the embedded appliance layer exist.
 sudo test -x rootfs/usr/local/bin/nexhash-run
 sudo test -x rootfs/usr/local/bin/nexhashctl
@@ -918,11 +912,6 @@ unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-welcome | grep 
 unsquashfs -cat verify/filesystem.squashfs etc/skel/.config/autostart/nexhash-welcome.desktop | grep -q 'nexhash-welcome'
 unsquashfs -cat verify/filesystem.squashfs usr/share/applications/nexhash-welcome.desktop | grep -q 'Central de controle'
 unsquashfs -cat verify/filesystem.squashfs etc/systemd/system/nexhash.service | grep -q 'Restart=always'
-unsquashfs -cat verify/filesystem.squashfs etc/systemd/system/nexhash-asic-recovery.service | grep -q 'Restart=always'
-unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-asic-recovery | grep -q 'cooldown_target_c'
-unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-asic-recovery | grep -q 'max_attempts_per_hour'
-unsquashfs -cat verify/filesystem.squashfs etc/nexhash/recovery.json | grep -q '"cooldown_seconds": 180'
-unsquashfs -cat verify/filesystem.squashfs etc/skel/.config/autostart/nexhash-dashboard.desktop | grep -q 'nexhash-open-dashboard'
 # Real V1.5 app payload must be inside the final ISO, not just the appliance bootstrap.
 unsquashfs -ll verify/filesystem.squashfs > verify/squashfs-list.txt
 grep -Eq 'opt/nexhash/current/.+(docker-compose\.ya?ml|compose\.ya?ml|HOSPEDAR-NEXHASH-CLOUD\.md|README-RAPIDO\.txt)' verify/squashfs-list.txt
@@ -963,127 +952,30 @@ grep -q '^Package: powerdevil$' verify/status
 grep -q '^Package: opera-stable$' verify/status
 grep -q '^Package: tailscale$' verify/status
 grep -q '^Package: nodejs$' verify/status
-grep -q '^Package: python3-pyqt5
+grep -q '^Package: python3-pyqt5$' verify/status
+grep -q '^Package: docker.io$' verify/status
+
 test "$(stat -c%s "$DEST")" -gt 3000000000
 
 {
   echo "NEXHASH EDGEOS 2.5 APPLIANCE FINAL ISO VALIDATED"
   echo "BIOS installer menu: OK"
   echo "UEFI installer menu: OK"
-  echo "nexhash-installer=1: OK"
-  echo "Calamares installer/autostart: OK"
-  echo "NetworkManager backend: OK"
-  echo "NetworkManager DNS/resolver ownership: OK"
-  echo "Boot-time network self-repair: OK"
-  echo "Plasma network Connect UI: OK"
-  echo "Wi-Fi radio setup: OK"
-  echo "Single battery indicator policy: OK"
-  echo "Battery percentage in NexHash Welcome: OK"
-  echo "NexHash live/admin sudo without broken password prompt: OK"
-  echo "Internet reachability status in Welcome: OK"
-  echo "NexHash product welcome center: OK"
-  echo "NexHash autohost systemd service: OK"
-  echo "ASIC drop detection/recovery watchdog: OK"
-  echo "ASIC cooldown countdown + temperature gate: OK"
-  echo "ASIC reboot loop protection: OK"
-  echo "Opera auto-open NexHash dashboard: OK"
-  echo "NexHash server/watchdog live status in welcome center: OK"
-  echo "NexHash Commercial V1.5 payload embedded: OK"
-  echo "NexHash local server.js + node_modules preinstalled: OK"
-  echo "NexHash protected internal watchdog API: OK"
-  echo "NexHash local port 8787 environment: OK"
-  echo "NexHash server systemd service/restart policy: OK"
-  echo "NexHash Opera autostart to local server: OK"
-  echo "Braiins Toolbox 26.09 verified: OK"
-  echo "ASIC watchdog automatic recovery: OK"
-  echo "ASIC cooling countdown before recovery: 180s"
-  echo "ASIC post-restart stabilization: 240s"
-  echo "ASIC retry/loop protection: OK"
-  echo "NexHash branding/icon/theme: OK"
-  echo "Opera: OK"
-  echo "Tailscale: OK"
-  echo "Node.js: OK"
-  echo "Docker runtime for NexHash Production Cloud: OK"
-  echo "PyQt welcome runtime: OK"
-  echo "KDE/PowerDevil: OK"
-  echo "User wallpaper via Higgsfield: OK"
-  echo
-  sha256sum "$DEST"
-} | tee "$OUT_DIR/FINAL-VALIDATED.txt"
-
-split -b 450M -d -a 2 "$DEST" "$OUT_DIR/final-part-"
-sha256sum "$OUT_DIR"/final-part-* > "$OUT_DIR/final-parts.sha256"
- verify/status
-grep -q '^Package: docker.io
-test "$(stat -c%s "$DEST")" -gt 3000000000
-
-{
-  echo "NEXHASH EDGEOS 2.5 APPLIANCE FINAL ISO VALIDATED"
-  echo "BIOS installer menu: OK"
-  echo "UEFI installer menu: OK"
-  echo "nexhash-installer=1: OK"
-  echo "Calamares installer/autostart: OK"
-  echo "NetworkManager backend: OK"
-  echo "NetworkManager DNS/resolver ownership: OK"
-  echo "Boot-time network self-repair: OK"
-  echo "Plasma network Connect UI: OK"
-  echo "Wi-Fi radio setup: OK"
-  echo "Single battery indicator policy: OK"
-  echo "Battery percentage in NexHash Welcome: OK"
-  echo "NexHash live/admin sudo without broken password prompt: OK"
-  echo "Internet reachability status in Welcome: OK"
-  echo "NexHash product welcome center: OK"
-  echo "NexHash server systemd service/restart policy: OK"
-  echo "NexHash Opera autostart to local server: OK"
-  echo "ASIC watchdog automatic recovery: OK"
-  echo "ASIC cooling countdown before recovery: 180s"
-  echo "ASIC post-restart stabilization: 240s"
-  echo "ASIC retry/loop protection: OK"
-  echo "NexHash branding/icon/theme: OK"
-  echo "Opera: OK"
-  echo "Tailscale: OK"
-  echo "Node.js: OK"
-  echo "PyQt welcome runtime: OK"
-  echo "KDE/PowerDevil: OK"
-  echo "User wallpaper via Higgsfield: OK"
-  echo
-  sha256sum "$DEST"
-} | tee "$OUT_DIR/FINAL-VALIDATED.txt"
-
-split -b 450M -d -a 2 "$DEST" "$OUT_DIR/final-part-"
-sha256sum "$OUT_DIR"/final-part-* > "$OUT_DIR/final-parts.sha256"
- verify/status
-test "$(stat -c%s "$DEST")" -gt 3000000000
-
-{
-  echo "NEXHASH EDGEOS 2.5 APPLIANCE FINAL ISO VALIDATED"
-  echo "BIOS installer menu: OK"
-  echo "UEFI installer menu: OK"
-  echo "nexhash-installer=1: OK"
-  echo "Calamares installer/autostart: OK"
-  echo "NetworkManager backend: OK"
-  echo "NetworkManager DNS/resolver ownership: OK"
-  echo "Boot-time network self-repair: OK"
-  echo "Plasma network Connect UI: OK"
-  echo "Wi-Fi radio setup: OK"
-  echo "Single battery indicator policy: OK"
-  echo "Battery percentage in NexHash Welcome: OK"
-  echo "NexHash live/admin sudo without broken password prompt: OK"
-  echo "Internet reachability status in Welcome: OK"
-  echo "NexHash product welcome center: OK"
-  echo "NexHash server systemd service/restart policy: OK"
-  echo "NexHash Opera autostart to local server: OK"
-  echo "ASIC watchdog automatic recovery: OK"
-  echo "ASIC cooling countdown before recovery: 180s"
-  echo "ASIC post-restart stabilization: 240s"
-  echo "ASIC retry/loop protection: OK"
-  echo "NexHash branding/icon/theme: OK"
-  echo "Opera: OK"
-  echo "Tailscale: OK"
-  echo "Node.js: OK"
-  echo "PyQt welcome runtime: OK"
-  echo "KDE/PowerDevil: OK"
-  echo "User wallpaper via Higgsfield: OK"
+  echo "Calamares installer: OK"
+  echo "Network/DNS self-repair: OK"
+  echo "Single battery indicator: OK"
+  echo "NexHash Commercial V1.5 embedded: OK"
+  echo "NexHash autohost :8787: OK"
+  echo "NexHash Restart=always: OK"
+  echo "Opera auto-open: OK"
+  echo "Tailscale service/onboarding: OK"
+  echo "Braiins Toolbox: OK"
+  echo "Single ASIC watchdog: OK"
+  echo "ASIC failure confirmation: 3 cycles"
+  echo "ASIC cooling: 180 seconds"
+  echo "ASIC fans during cooldown: 100 percent request"
+  echo "ASIC stabilization after restart: 240 seconds"
+  echo "ASIC retry protection: 3 attempts plus backoff"
   echo
   sha256sum "$DEST"
 } | tee "$OUT_DIR/FINAL-VALIDATED.txt"
