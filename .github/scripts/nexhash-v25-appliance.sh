@@ -105,6 +105,8 @@ ThreadingHTTPServer((HOST,PORT),H).serve_forever()
 PY_BOOT
 chmod +x "$ROOT/usr/local/lib/nexhash/bootstrap_server.py"
 
+install -d "$ROOT/etc/skel/.config/autostart"
+
 cat > "$ROOT/usr/local/bin/nexhash-tailscale-autoconnect" <<'EOF'
 #!/usr/bin/env bash
 set -u
@@ -123,10 +125,44 @@ if [ -s /etc/nexhash/tailscale-authkey ]; then
 fi
 
 # If the machine was authenticated before, tailscaled's persistent state reconnects automatically.
-# Otherwise leave it ready for one secure approval instead of exposing credentials.
+# Otherwise start login non-interactively and expose only the short-lived approval URL locally.
+OUT="$(tailscale up --hostname=nexhash-edge --accept-dns=true 2>&1 || true)"
+URL="$(printf '%s\n' "$OUT" | grep -Eo 'https://login\.tailscale\.com/[^ ]+' | head -n1 || true)"
+if [ -n "$URL" ]; then
+  install -d -m 0755 /run/nexhash
+  printf '%s\n' "$URL" > /run/nexhash/tailscale-login-url
+  chmod 0644 /run/nexhash/tailscale-login-url
+fi
 exit 0
 EOF
 chmod +x "$ROOT/usr/local/bin/nexhash-tailscale-autoconnect"
+
+cat > "$ROOT/usr/local/bin/nexhash-tailscale-onboarding" <<'EOF'
+#!/usr/bin/env bash
+set -u
+for i in $(seq 1 90); do
+  if tailscale status >/dev/null 2>&1; then
+    exit 0
+  fi
+  if [ -s /run/nexhash/tailscale-login-url ]; then
+    URL="$(head -n1 /run/nexhash/tailscale-login-url)"
+    exec opera --new-window "$URL"
+  fi
+  sleep 2
+done
+exit 0
+EOF
+chmod +x "$ROOT/usr/local/bin/nexhash-tailscale-onboarding"
+
+cat > "$ROOT/etc/skel/.config/autostart/nexhash-tailscale-onboarding.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=NexHash Tailscale Setup
+Exec=/usr/local/bin/nexhash-tailscale-onboarding
+X-KDE-autostart-after=panel
+Terminal=false
+NoDisplay=true
+EOF
 
 cat > "$ROOT/etc/systemd/system/nexhash-tailscale-autoconnect.service" <<'EOF'
 [Unit]
@@ -416,12 +452,49 @@ def unhealthy(m):
         return True,f"hashrate baixo {hr:.2f} < {expected*MIN_RATIO:.2f}"
     return False,"ok"
 
+def normalize_miners(obj):
+    if isinstance(obj,list): items=obj
+    elif isinstance(obj,dict):
+        items=obj.get("miners") or obj.get("machines") or obj.get("devices") or obj.get("items") or []
+    else: items=[]
+    out=[]
+    for x in items:
+        if not isinstance(x,dict): continue
+        ip=x.get("ip") or x.get("host") or x.get("address")
+        if not ip: continue
+        m=dict(x)
+        m["ip"]=str(ip)
+        m.setdefault("id",str(x.get("id") or x.get("uuid") or ip))
+        m.setdefault("name",str(x.get("name") or x.get("alias") or x.get("model") or ip))
+        fw=str(x.get("firmware") or x.get("firmware_name") or "").lower()
+        if "braiins" in fw or fw in ("bos","bos+"):
+            m["firmware"]="braiins"
+        m.setdefault("enabled",True)
+        out.append(m)
+    return out
+
+def get_registered_miners():
+    # Prefer the live NexHash database/API so recovery follows machines configured in the UI.
+    urls=[
+      "http://127.0.0.1:8787/api/miners",
+      "http://127.0.0.1:8787/api/v1/miners",
+      "http://127.0.0.1:8787/api/machines",
+      "http://127.0.0.1:8787/api/v1/machines",
+      "http://127.0.0.1:8787/api/devices"
+    ]
+    for url in urls:
+        data=http_json(url,2)
+        ms=normalize_miners(data)
+        if ms:
+            return ms
+    return normalize_miners(load_json(CFG,{"miners":[]}))
+
 STATE_OBJ=load_json(STATE,{})
 log("ASIC watchdog iniciado")
 
 while True:
-    cfg=load_json(CFG,{"miners":[]})
-    for m in cfg.get("miners",[]):
+    miners=get_registered_miners()
+    for m in miners:
         if not m.get("enabled",True): continue
         name=m.get("name",m.get("ip","unknown"))
         key=m.get("id") or m.get("ip")
