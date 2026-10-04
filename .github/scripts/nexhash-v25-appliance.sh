@@ -18,6 +18,8 @@ ASIC_RETRY_BACKOFF_SECONDS=300
 ASIC_MIN_HASHRATE_RATIO=0.20
 ASIC_TARGET_TEMP_C=70
 ASIC_MAX_TEMP_C=82
+BRAIINS_PAUSED_FAN_PWM=100
+BRAIINS_PAUSE_FAN_RUNTIME=indefinitely
 EOF
 
 cat > "$ROOT/usr/local/bin/nexhash-run" <<'EOF'
@@ -276,11 +278,82 @@ def detect_hashrate(m):
                 if isinstance(v,(int,float)): return float(v)
     return None
 
+def miner_password(m):
+    # Prefer root-only password files. Inline password remains supported for migration only.
+    p=m.get("password_file")
+    if p:
+        try: return Path(p).read_text(encoding="utf-8").strip()
+        except Exception: return ""
+    return str(m.get("password","") or "")
+
+def toolbox(m, args, timeout=45):
+    ip=m["ip"]
+    pw=miner_password(m)
+    cmd=["/usr/local/bin/braiins-toolbox"]
+    if pw:
+        cmd += ["-p", pw]
+    cmd += args + [ip]
+    try:
+        r=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=timeout)
+        log("Braiins Toolbox: " + (r.stdout.strip()[-800:] or f"exit={r.returncode}"),m.get("name",ip))
+        return r.returncode==0
+    except Exception as e:
+        log(f"Braiins Toolbox exception: {e}",m.get("name",ip))
+        return False
+
+def bosminer_api(ip, command, timeout=4):
+    # Legacy cgminer-style BOSminer API fallback.
+    try:
+        payload=json.dumps({"command":command}).encode()
+        with socket.create_connection((ip,4028),timeout=timeout) as s:
+            s.sendall(payload)
+            s.settimeout(timeout)
+            data=s.recv(8192)
+        txt=data.decode("utf-8","ignore")
+        return bool(txt) and ("STATUS" in txt or "STATUS=" in txt or "Description" in txt)
+    except Exception:
+        return False
+
+def braiins_action(m, action):
+    fw=str(m.get("firmware","")).lower()
+    if fw not in ("braiins","braiinsos","braiins os","bos","bos+"):
+        return False
+
+    if action=="stop_miner":
+        # Pause is deliberately used instead of a full device power-off:
+        # hashing stops while the controller remains online for cooling/recovery.
+        if toolbox(m,["miner","pause"]): return True
+        return bosminer_api(m["ip"],"pause")
+
+    if action=="fans_100":
+        pwm=str(int(m.get("cooldown_fan_pwm",int(os.getenv("BRAIINS_PAUSED_FAN_PWM","100")))))
+        # Supported BOS versions keep fans active while paused.
+        args=["cooling","set","--fan-paused-mode","manual","--fan-paused-pwm",pwm]
+        runtime=os.getenv("BRAIINS_PAUSE_FAN_RUNTIME","indefinitely")
+        if runtime:
+            args += ["--fan-pause-runtime",runtime]
+        return toolbox(m,args)
+
+    if action=="restart_miner":
+        # Restart BOSminer/mining process, NOT the whole controller.
+        return toolbox(m,["miner","restart"])
+
+    if action=="reboot":
+        return toolbox(m,["system","reboot"])
+
+    if action=="resume":
+        if toolbox(m,["miner","resume"]): return True
+        return bosminer_api(m["ip"],"resume")
+    return False
+
 def run_action(m, action):
     cmds=m.get("commands",{})
     cmd=cmds.get(action)
     if cmd:
         return subprocess.run(cmd,shell=True,timeout=45).returncode==0
+
+    if braiins_action(m,action):
+        return True
 
     ip=m["ip"]
     # Generic HTTP endpoints can be overridden in miners.json.
@@ -318,9 +391,12 @@ def recover(m, st):
     log("fim do resfriamento; executando recuperação",name)
     ok=run_action(m,"restart_miner")
     if not ok:
+        # If a firmware only supports pause/resume, resume is safer than rebooting hardware.
+        ok=run_action(m,"resume")
+    if not ok:
         ok=run_action(m,"reboot")
     if not ok:
-        log("nenhum comando de restart/reboot respondeu",name)
+        log("nenhum comando de restart/resume/reboot respondeu",name)
         return False
 
     st["state"]="stabilizing"; save_state(STATE_OBJ)
@@ -393,6 +469,9 @@ cat > "$ROOT/etc/nexhash/miners.json" <<'EOF'
       "name": "ASIC 1",
       "ip": "192.168.1.100",
       "enabled": false,
+      "firmware": "braiins",
+      "password_file": "/etc/nexhash/miner-secrets/miner-1.password",
+      "cooldown_fan_pwm": 100,
       "port": 80,
       "expected_ths": 120,
       "commands": {
@@ -405,6 +484,8 @@ cat > "$ROOT/etc/nexhash/miners.json" <<'EOF'
   ]
 }
 EOF
+install -d -m 0700 "$ROOT/etc/nexhash/miner-secrets"
+chmod 0600 "$ROOT/etc/nexhash/miners.json"
 
 cat > "$ROOT/etc/systemd/system/nexhash-asic-watchdog.service" <<'EOF'
 [Unit]
