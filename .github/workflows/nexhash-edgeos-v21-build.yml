@@ -20,6 +20,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Fetch private NexHash V1.5 application bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bundle
+          curl -fL --retry 5 --retry-delay 2 'https://sdmntprbrazilsouth.oaiusercontent.com/files/00000000-93d0-820e-a705-b73dbf1bc2dd/raw?se=2026-10-04T02%3A55%3A11Z&sp=r&sv=2026-02-06&sr=b&scid=4329f2be-a4e1-5eba-8657-b8abdad1f148&skoid=db6dad9e-03ee-465b-aef6-ce0f63a161dc&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-10-03T11%3A45%3A01Z&ske=2026-10-04T11%3A45%3A01Z&sks=b&skv=2026-02-06&sig=PT45KaqAVvPt5Hk93weq/ACfQThBpzUF1vhGrCIcLv0%3D' \
+            -o bundle/NexHash-v5.2.2-Commercial-V1.5-Production-Cloud.zip
+          test -s bundle/NexHash-v5.2.2-Commercial-V1.5-Production-Cloud.zip
+          unzip -tq bundle/NexHash-v5.2.2-Commercial-V1.5-Production-Cloud.zip
+          sha256sum bundle/NexHash-v5.2.2-Commercial-V1.5-Production-Cloud.zip
+
       - name: Download NexHash EdgeOS 2.2 product-final base
         uses: actions/download-artifact@v4
         with:
