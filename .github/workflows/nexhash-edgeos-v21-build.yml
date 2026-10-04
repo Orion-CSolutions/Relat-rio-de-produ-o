@@ -25,7 +25,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p bundle
-          curl -fL --retry 5 --retry-delay 2 'https://sdmntprbrazilsouth.oaiusercontent.com/files/00000000-592c-820e-87e7-204e46681fab/raw?se=2026-10-04T14%3A13%3A08Z&sp=r&sv=2026-02-06&sr=b&scid=a9896b7d-f483-5589-91c5-821d40cdea92&skoid=db6dad9e-03ee-465b-aef6-ce0f63a161dc&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-10-03T19%3A02%3A11Z&ske=2026-10-04T19%3A02%3A11Z&sks=b&skv=2026-02-06&sig=pezgEhmmSSW0ki0S0K0/1kEmLSjUDuAE2N1q13PfKsQ%3D' \
+          curl -fL --retry 5 --retry-delay 2 'https://sdmntprbrazilsouth.oaiusercontent.com/files/00000000-cd0c-820e-92cb-621cf99074a6/raw?se=2026-10-04T15%3A26%3A30Z&sp=r&sv=2026-02-06&sr=b&scid=8954b86b-1389-5e12-ac60-95abe914e753&skoid=db6dad9e-03ee-465b-aef6-ce0f63a161dc&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-10-04T12%3A12%3A56Z&ske=2026-10-05T12%3A12%3A56Z&sks=b&skv=2026-02-06&sig=KHVoAiUEZu/B3jqszmI7yfwHaw4wgiqbGu6yXl1Hpfs%3D' \
             -o bundle/NexHash-v5.2.2-Commercial-V1.5-Production-Cloud.zip
           test -s bundle/NexHash-v5.2.2-Commercial-V1.5-Production-Cloud.zip
           unzip -tq bundle/NexHash-v5.2.2-Commercial-V1.5-Production-Cloud.zip
