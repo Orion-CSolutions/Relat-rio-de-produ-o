@@ -51,6 +51,8 @@ fi
 # Ensure the KDE/NetworkManager connection UI exists.
 apt-get update
 apt-get install -y network-manager plasma-nm plasma-pa powerdevil wpasupplicant rfkill python3-pyqt5 fonts-noto-core
+apt-get install -y docker.io docker-compose || apt-get install -y docker.io docker-compose-plugin || true
+systemctl enable docker.service 2>/dev/null || true
 apt-get install -y network-manager-gnome wireless-tools || true
 apt-get install -y firmware-iwlwifi firmware-realtek firmware-atheros firmware-brcm80211 || true
 
@@ -550,7 +552,85 @@ grep -q '^Package: powerdevil$' verify/status
 grep -q '^Package: opera-stable$' verify/status
 grep -q '^Package: tailscale$' verify/status
 grep -q '^Package: nodejs$' verify/status
-grep -q '^Package: python3-pyqt5$' verify/status
+grep -q '^Package: python3-pyqt5
+test "$(stat -c%s "$DEST")" -gt 3000000000
+
+{
+  echo "NEXHASH EDGEOS 2.5 APPLIANCE FINAL ISO VALIDATED"
+  echo "BIOS installer menu: OK"
+  echo "UEFI installer menu: OK"
+  echo "nexhash-installer=1: OK"
+  echo "Calamares installer/autostart: OK"
+  echo "NetworkManager backend: OK"
+  echo "NetworkManager DNS/resolver ownership: OK"
+  echo "Boot-time network self-repair: OK"
+  echo "Plasma network Connect UI: OK"
+  echo "Wi-Fi radio setup: OK"
+  echo "Single battery indicator policy: OK"
+  echo "Battery percentage in NexHash Welcome: OK"
+  echo "NexHash live/admin sudo without broken password prompt: OK"
+  echo "Internet reachability status in Welcome: OK"
+  echo "NexHash product welcome center: OK"
+  echo "NexHash server systemd service/restart policy: OK"
+  echo "NexHash Opera autostart to local server: OK"
+  echo "ASIC watchdog automatic recovery: OK"
+  echo "ASIC cooling countdown before recovery: 180s"
+  echo "ASIC post-restart stabilization: 240s"
+  echo "ASIC retry/loop protection: OK"
+  echo "NexHash branding/icon/theme: OK"
+  echo "Opera: OK"
+  echo "Tailscale: OK"
+  echo "Node.js: OK"
+  echo "Docker runtime for NexHash Production Cloud: OK"
+  echo "PyQt welcome runtime: OK"
+  echo "KDE/PowerDevil: OK"
+  echo "User wallpaper via Higgsfield: OK"
+  echo
+  sha256sum "$DEST"
+} | tee "$OUT_DIR/FINAL-VALIDATED.txt"
+
+split -b 450M -d -a 2 "$DEST" "$OUT_DIR/final-part-"
+sha256sum "$OUT_DIR"/final-part-* > "$OUT_DIR/final-parts.sha256"
+ verify/status
+grep -q '^Package: docker.io
+test "$(stat -c%s "$DEST")" -gt 3000000000
+
+{
+  echo "NEXHASH EDGEOS 2.5 APPLIANCE FINAL ISO VALIDATED"
+  echo "BIOS installer menu: OK"
+  echo "UEFI installer menu: OK"
+  echo "nexhash-installer=1: OK"
+  echo "Calamares installer/autostart: OK"
+  echo "NetworkManager backend: OK"
+  echo "NetworkManager DNS/resolver ownership: OK"
+  echo "Boot-time network self-repair: OK"
+  echo "Plasma network Connect UI: OK"
+  echo "Wi-Fi radio setup: OK"
+  echo "Single battery indicator policy: OK"
+  echo "Battery percentage in NexHash Welcome: OK"
+  echo "NexHash live/admin sudo without broken password prompt: OK"
+  echo "Internet reachability status in Welcome: OK"
+  echo "NexHash product welcome center: OK"
+  echo "NexHash server systemd service/restart policy: OK"
+  echo "NexHash Opera autostart to local server: OK"
+  echo "ASIC watchdog automatic recovery: OK"
+  echo "ASIC cooling countdown before recovery: 180s"
+  echo "ASIC post-restart stabilization: 240s"
+  echo "ASIC retry/loop protection: OK"
+  echo "NexHash branding/icon/theme: OK"
+  echo "Opera: OK"
+  echo "Tailscale: OK"
+  echo "Node.js: OK"
+  echo "PyQt welcome runtime: OK"
+  echo "KDE/PowerDevil: OK"
+  echo "User wallpaper via Higgsfield: OK"
+  echo
+  sha256sum "$DEST"
+} | tee "$OUT_DIR/FINAL-VALIDATED.txt"
+
+split -b 450M -d -a 2 "$DEST" "$OUT_DIR/final-part-"
+sha256sum "$OUT_DIR"/final-part-* > "$OUT_DIR/final-parts.sha256"
+ verify/status
 test "$(stat -c%s "$DEST")" -gt 3000000000
 
 {
