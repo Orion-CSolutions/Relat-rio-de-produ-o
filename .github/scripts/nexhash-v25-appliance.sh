@@ -39,10 +39,132 @@ if [ -f app.py ]; then exec python3 app.py; fi
 if [ -f server.py ]; then exec python3 server.py; fi
 if [ -f main.py ]; then exec python3 main.py; fi
 
-echo "NexHash application not found in /opt/nexhash/current" >&2
-exit 78
+echo "NexHash application package not found; starting appliance bootstrap on :${PORT}" >&2
+exec python3 /usr/local/lib/nexhash/bootstrap_server.py
 EOF
 chmod +x "$ROOT/usr/local/bin/nexhash-run"
+
+cat > "$ROOT/usr/local/lib/nexhash/bootstrap_server.py" <<'PY_BOOT'
+#!/usr/bin/env python3
+import json, os, socket
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+PORT=int(os.environ.get("PORT","8787"))
+HOST=os.environ.get("HOST","0.0.0.0")
+
+HTML="""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>NexHash EdgeOS</title><style>
+body{margin:0;background:#07111f;color:#eef5ff;font-family:system-ui,-apple-system,Segoe UI,sans-serif;display:grid;place-items:center;min-height:100vh}
+.card{width:min(760px,90vw);background:#0d1a2b;border:1px solid #1c3557;border-radius:22px;padding:36px;box-shadow:0 24px 70px #0007}
+h1{margin:0 0 10px;font-size:38px}.blue{color:#278cff}p{color:#aabbd0;line-height:1.55}
+.badge{display:inline-block;padding:8px 12px;border-radius:999px;background:#13243a;border:1px solid #28517d;margin-top:10px}
+small{color:#7f93aa}
+</style></head><body><div class='card'>
+<h1>Nex<span class='blue'>Hash</span> EdgeOS</h1>
+<p>Appliance online. O serviço principal está ativo e aguardando o pacote NexHash de produção em <b>/opt/nexhash/current</b>.</p>
+<div class='badge'>Servidor :8787 operacional</div>
+<p><small>Rede, Tailscale, watchdog de ASIC e diagnóstico continuam ativos independentemente do navegador.</small></p>
+</div></body></html>"""
+
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path in ("/health","/api/health"):
+            b=json.dumps({"ok":True,"service":"nexhash-bootstrap","host":socket.gethostname(),"port":PORT}).encode()
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Content-Length",str(len(b))); self.end_headers(); self.wfile.write(b); return
+        b=HTML.encode()
+        self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Content-Length",str(len(b))); self.end_headers(); self.wfile.write(b)
+    def log_message(self,*a): pass
+
+ThreadingHTTPServer((HOST,PORT),H).serve_forever()
+PY_BOOT
+chmod +x "$ROOT/usr/local/lib/nexhash/bootstrap_server.py"
+
+cat > "$ROOT/usr/local/bin/nexhash-tailscale-autoconnect" <<'EOF'
+#!/usr/bin/env bash
+set -u
+systemctl start tailscaled >/dev/null 2>&1 || true
+for i in $(seq 1 30); do
+  tailscale status >/dev/null 2>&1 && exit 0
+  sleep 2
+done
+
+# Optional secure provisioning path. The key is never committed to the ISO.
+if [ -s /etc/nexhash/tailscale-authkey ]; then
+  KEY="$(cat /etc/nexhash/tailscale-authkey)"
+  tailscale up --auth-key="$KEY" --hostname=nexhash-edge --accept-dns=true
+  shred -u /etc/nexhash/tailscale-authkey 2>/dev/null || rm -f /etc/nexhash/tailscale-authkey
+  exit $?
+fi
+
+# If the machine was authenticated before, tailscaled's persistent state reconnects automatically.
+# Otherwise leave it ready for one secure approval instead of exposing credentials.
+exit 0
+EOF
+chmod +x "$ROOT/usr/local/bin/nexhash-tailscale-autoconnect"
+
+cat > "$ROOT/etc/systemd/system/nexhash-tailscale-autoconnect.service" <<'EOF'
+[Unit]
+Description=NexHash Tailscale Auto-Reconnect
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nexhash-tailscale-autoconnect
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat > "$ROOT/usr/local/lib/nexhash/health_server.py" <<'PY_HEALTH'
+#!/usr/bin/env python3
+import json, os, shutil, socket, subprocess, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+def sh(cmd):
+    try: return subprocess.check_output(cmd,shell=True,text=True,stderr=subprocess.DEVNULL,timeout=3).strip()
+    except Exception: return ""
+
+def payload():
+    total,used,free=sh("free -m | awk '/Mem:/{print $2,$3,$4}'").split() if sh("free -m | awk '/Mem:/{print $2,$3,$4}'") else ("0","0","0")
+    du=sh("df -P / | awk 'NR==2{print $2,$3,$4,$5}'").split()
+    return {
+      "ok":True,"host":socket.gethostname(),"uptime":sh("uptime -p"),
+      "ip":sh("hostname -I"),"tailscale_ip":sh("tailscale ip -4 | head -n1"),
+      "nexhash":sh("systemctl is-active nexhash.service"),
+      "asic_watchdog":sh("systemctl is-active nexhash-asic-watchdog.service"),
+      "tailscale":sh("systemctl is-active tailscaled.service"),
+      "memory_mb":{"total":total,"used":used,"free":free},
+      "disk":du
+    }
+
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        b=json.dumps(payload(),ensure_ascii=False).encode()
+        self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Content-Length",str(len(b))); self.end_headers(); self.wfile.write(b)
+    def log_message(self,*a): pass
+
+ThreadingHTTPServer(("0.0.0.0",8790),H).serve_forever()
+PY_HEALTH
+chmod +x "$ROOT/usr/local/lib/nexhash/health_server.py"
+
+cat > "$ROOT/etc/systemd/system/nexhash-health.service" <<'EOF'
+[Unit]
+Description=NexHash EdgeOS Health API
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/nexhash/health_server.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
 
 cat > "$ROOT/etc/systemd/system/nexhash.service" <<'EOF'
 [Unit]
@@ -326,5 +448,7 @@ EOF
 install -d "$ROOT/etc/systemd/system/multi-user.target.wants"
 ln -sf ../nexhash.service "$ROOT/etc/systemd/system/multi-user.target.wants/nexhash.service"
 ln -sf ../nexhash-asic-watchdog.service "$ROOT/etc/systemd/system/multi-user.target.wants/nexhash-asic-watchdog.service"
+ln -sf ../nexhash-health.service "$ROOT/etc/systemd/system/multi-user.target.wants/nexhash-health.service"
+ln -sf ../nexhash-tailscale-autoconnect.service "$ROOT/etc/systemd/system/multi-user.target.wants/nexhash-tailscale-autoconnect.service"
 
 echo "NexHash appliance layer installed into $ROOT"
