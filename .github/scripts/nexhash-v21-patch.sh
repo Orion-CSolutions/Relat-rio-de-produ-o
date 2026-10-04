@@ -208,9 +208,10 @@ class Welcome(QtWidgets.QMainWindow):
         grid=QtWidgets.QGridLayout(); grid.setHorizontalSpacing(16); grid.setVerticalSpacing(16)
         self.net=StatusCard("Rede", "◉"); self.net.button("Connect", lambda: spawn("/usr/local/bin/nexhash-network-connect"), True); self.net.button("Configurações", lambda: spawn("systemsettings kcm_networkmanagement"))
         self.tail=StatusCard("Acesso remoto", "◌"); self.tail.button("Abrir Tailscale", lambda: spawn("/usr/local/bin/nexhash-tailscale"), True)
-        self.apps=StatusCard("Aplicativos", "◆")
-        self.apps.status.setText("Prontos para uso"); self.apps.detail.setText("Opera • Tailscale • Calamares • Terminal")
-        self.apps.button("Opera", lambda: spawn("opera >/dev/null 2>&1 &"), True); self.apps.button("Instalador", lambda: spawn("calamares >/dev/null 2>&1 &"))
+        self.apps=StatusCard("NexHash Server", "◆")
+        self.apps.status.setText("Verificando…"); self.apps.detail.setText("Servidor local • porta 8787 • recuperação automática")
+        self.apps.button("Abrir NexHash", lambda: spawn("opera --new-window http://127.0.0.1:8787 >/dev/null 2>&1 &"), True)
+        self.apps.button("Diagnóstico", lambda: spawn("opera --new-window http://127.0.0.1:8790 >/dev/null 2>&1 &"))
         self.system=StatusCard("Sistema", "⚙")
         self.system.button("Configurações", lambda: spawn("systemsettings >/dev/null 2>&1 &"), True)
         self.system.button("Terminal", lambda: spawn("konsole >/dev/null 2>&1 &"))
@@ -279,10 +280,20 @@ class Welcome(QtWidgets.QMainWindow):
             except Exception: pass
         ac=run("cat /sys/class/power_supply/A*/online 2>/dev/null | head -n1")
         self.battery.setText(f"⚡ {pct}%" if ac=="1" else f"🔋 {pct}%")
+        nexhash_ok=bool(run("curl -fsS --max-time 2 http://127.0.0.1:8787/health >/dev/null 2>&1 && echo ok") or run("curl -fsS --max-time 2 http://127.0.0.1:8787 >/dev/null 2>&1 && echo ok"))
+        watchdog=run("systemctl is-active nexhash-asic-watchdog.service")
+        if nexhash_ok:
+            self.apps.status.setText("● Servidor Online")
+            self.apps.detail.setText("NexHash :8787  •  Watchdog ASIC " + ("ativo" if watchdog=="active" else "iniciando"))
+        else:
+            self.apps.status.setText("○ Servidor iniciando")
+            self.apps.detail.setText("Serviço automático ativo • aguardando NexHash na porta 8787")
+
         host=socket.gethostname()
         up=run("uptime -p")
+        docker=run("systemctl is-active docker.service")
         self.system.status.setText("● Operacional")
-        self.system.detail.setText(f"{host}  •  {up or 'sistema pronto'}")
+        self.system.detail.setText(f"{host}  •  {up or 'sistema pronto'}  •  Docker {docker or 'n/a'}")
 
 app=QtWidgets.QApplication([])
 app.setApplicationName("NexHash EdgeOS")
@@ -586,6 +597,8 @@ unsquashfs -cat verify/filesystem.squashfs etc/sudoers.d/90-nexhash-edgeos > ver
 grep -q '^nexhash .*NOPASSWD: ALL' verify/nexhash-sudoers
 grep -q '^%sudo .*NOPASSWD: ALL' verify/nexhash-sudoers
 unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-welcome | grep -q 'sem Internet'
+unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-welcome | grep -q 'Servidor Online'
+unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-welcome | grep -q 'nexhash-asic-watchdog.service'
 # The default panel must not ship a second standalone battery plasmoid.
 if unsquashfs -cat verify/filesystem.squashfs etc/skel/.config/plasma-org.kde.plasma.desktop-appletsrc 2>/dev/null | grep -q 'plugin=org.kde.plasma.battery'; then
   echo "Duplicate standalone battery plasmoid still present" >&2
@@ -617,6 +630,7 @@ test "$(stat -c%s "$DEST")" -gt 3000000000
   echo "NexHash live/admin sudo without broken password prompt: OK"
   echo "Internet reachability status in Welcome: OK"
   echo "NexHash product welcome center: OK"
+  echo "NexHash server/watchdog live status in welcome center: OK"
   echo "NexHash Commercial V1.5 payload embedded: OK"
   echo "NexHash server systemd service/restart policy: OK"
   echo "NexHash Opera autostart to local server: OK"
