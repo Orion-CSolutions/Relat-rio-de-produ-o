@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/nexhash-edgeos-v21-build.yml'
       - '.github/scripts/nexhash-v21-patch.sh'
+      - '.github/scripts/nexhash-v25-appliance.sh'
   workflow_dispatch:
 
 permissions:
