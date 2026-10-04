@@ -1,0 +1,77 @@
+name: Split NexHash EdgeOS 2.4 for Product Final
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/nexhash-split-24-for-local-final.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  split:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download 2.4 final ISO
+        uses: actions/download-artifact@v4
+        with:
+          name: NexHash-EdgeOS-2.4-STABLE-FINAL-Install-amd64
+          path: source
+          run-id: 37163943928
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Split ISO
+        shell: bash
+        run: |
+          set -euo pipefail
+          ISO="$(find source -type f -name '*.iso' | head -n1)"
+          test -s "$ISO"
+          mkdir -p parts
+          split -b 400M -d -a 2 "$ISO" parts/part-
+          sha256sum "$ISO" | tee parts/iso.sha256
+          sha256sum parts/part-* | tee parts/parts.sha256
+          ls -lh parts
+
+      - name: part 00
+        uses: actions/upload-artifact@v4
+        with: {name: NexHash24-part-00, path: parts/part-00, compression-level: 0, retention-days: 2}
+      - name: part 01
+        uses: actions/upload-artifact@v4
+        with: {name: NexHash24-part-01, path: parts/part-01, compression-level: 0, retention-days: 2}
+      - name: part 02
+        uses: actions/upload-artifact@v4
+        with: {name: NexHash24-part-02, path: parts/part-02, compression-level: 0, retention-days: 2}
+      - name: part 03
+        uses: actions/upload-artifact@v4
+        with: {name: NexHash24-part-03, path: parts/part-03, compression-level: 0, retention-days: 2}
+      - name: part 04
+        uses: actions/upload-artifact@v4
+        with: {name: NexHash24-part-04, path: parts/part-04, compression-level: 0, retention-days: 2}
+      - name: part 05
+        uses: actions/upload-artifact@v4
+        with: {name: NexHash24-part-05, path: parts/part-05, compression-level: 0, retention-days: 2}
+      - name: part 06
+        uses: actions/upload-artifact@v4
+        with: {name: NexHash24-part-06, path: parts/part-06, compression-level: 0, retention-days: 2}
+      - name: part 07
+        uses: actions/upload-artifact@v4
+        with: {name: NexHash24-part-07, path: parts/part-07, compression-level: 0, retention-days: 2}
+      - name: part 08
+        uses: actions/upload-artifact@v4
+        with: {name: NexHash24-part-08, path: parts/part-08, compression-level: 0, retention-days: 2}
+      - name: part 09
+        uses: actions/upload-artifact@v4
+        with: {name: NexHash24-part-09, path: parts/part-09, compression-level: 0, if-no-files-found: ignore, retention-days: 2}
+      - name: checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash24-checksums
+          path: |
+            parts/iso.sha256
+            parts/parts.sha256
+          retention-days: 2
