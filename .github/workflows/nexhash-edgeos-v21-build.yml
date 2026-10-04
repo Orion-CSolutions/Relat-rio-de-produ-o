@@ -1,4 +1,4 @@
-name: Build NexHash EdgeOS 2.3 NETFIX FINAL
+name: Build NexHash EdgeOS 2.4 STABLE FINAL
 
 on:
   push:
@@ -19,12 +19,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download validated NexHash EdgeOS 2.0 ISO
+      - name: Download NexHash EdgeOS 2.2 product-final base
         uses: actions/download-artifact@v4
         with:
-          name: NexHash-EdgeOS-2.0-FINAL-Install-amd64
+          name: NexHash-EdgeOS-2.2-PRODUCT-FINAL-Install-amd64
           path: source-artifact
-          run-id: 37105685465
+          run-id: 37130279416
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Unpack source artifact
@@ -35,19 +35,19 @@ jobs:
           find source-artifact -type f -maxdepth 2 -print
           ISO="$(find source-artifact -type f -name '*.iso' | head -n1)"
           test -s "$ISO"
-          cp "$ISO" source/NexHash-EdgeOS-2.0-FINAL-Install-amd64.iso
+          cp "$ISO" source/NexHash-EdgeOS-2.2-PRODUCT-FINAL-Install-amd64.iso
 
-      - name: Build and validate NexHash EdgeOS 2.3 Netfix Final
+      - name: Build and validate NexHash EdgeOS 2.4 Stable Final
         shell: bash
         run: bash .github/scripts/nexhash-v21-patch.sh source out
 
       - name: Upload final ISO
         uses: actions/upload-artifact@v4
         with:
-          name: NexHash-EdgeOS-2.3-NETFIX-FINAL-Install-amd64
+          name: NexHash-EdgeOS-2.4-STABLE-FINAL-Install-amd64
           path: |
-            out/NexHash-EdgeOS-2.3-NETFIX-FINAL-Install-amd64.iso
-            out/NexHash-EdgeOS-2.3-NETFIX-FINAL-Install-amd64.iso.sha256
+            out/NexHash-EdgeOS-2.4-STABLE-FINAL-Install-amd64.iso
+            out/NexHash-EdgeOS-2.4-STABLE-FINAL-Install-amd64.iso.sha256
             out/FINAL-VALIDATED.txt
           compression-level: 0
           retention-days: 3
@@ -55,7 +55,7 @@ jobs:
       - name: Upload split ISO
         uses: actions/upload-artifact@v4
         with:
-          name: NexHash-EdgeOS-2.3-NETFIX-FINAL-parts
+          name: NexHash-EdgeOS-2.4-STABLE-FINAL-parts
           path: |
             out/final-part-*
             out/final-parts.sha256
