@@ -473,6 +473,18 @@ sudo rm -f rootfs/etc/resolv.conf
 printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee rootfs/etc/resolv.conf >/dev/null
 sudo chmod 0644 rootfs/etc/resolv.conf
 
+echo "[2b/7] Installing verified Braiins Toolbox 26.09..."
+BRAIINS_URL="https://downloads.braiins.com/braiins-toolbox/assets/26.09/braiins-toolbox-linux-x86_64.tar.gz"
+BRAIINS_SHA="8d173eab04fcecf8922b74de575dbba587050128fd17545d32e63e93b739ea47"
+curl -fL --retry 5 --retry-delay 2 "$BRAIINS_URL" -o work/braiins-toolbox.tar.gz
+echo "$BRAIINS_SHA  work/braiins-toolbox.tar.gz" | sha256sum -c -
+rm -rf work/braiins-toolbox
+mkdir -p work/braiins-toolbox
+tar -xzf work/braiins-toolbox.tar.gz -C work/braiins-toolbox
+BRAIINS_BIN="$(find work/braiins-toolbox -type f -name 'braiins-toolbox' | head -n1)"
+test -n "$BRAIINS_BIN"
+sudo install -m 0755 "$BRAIINS_BIN" rootfs/usr/local/bin/braiins-toolbox
+
 echo "[3a/7] Embedding NexHash v5.2.2 Commercial V1.5 Production Cloud..."
 APP_ZIP="$(find bundle -maxdepth 1 -type f -name 'NexHash-v5.2.2-Commercial-V1.5-Production-Cloud.zip' | head -n1 || true)"
 test -n "$APP_ZIP"
@@ -558,6 +570,10 @@ unsquashfs -cat verify/filesystem.squashfs usr/share/applications/nexhash-welcom
 # Real V1.5 app payload must be inside the final ISO, not just the appliance bootstrap.
 unsquashfs -ll verify/filesystem.squashfs > verify/squashfs-list.txt
 grep -Eq 'opt/nexhash/current/.+(docker-compose\.ya?ml|compose\.ya?ml|HOSPEDAR-NEXHASH-CLOUD\.md|README-RAPIDO\.txt)' verify/squashfs-list.txt
+unsquashfs -cat verify/filesystem.squashfs usr/local/bin/braiins-toolbox > verify/braiins-toolbox
+test -s verify/braiins-toolbox
+chmod +x verify/braiins-toolbox
+verify/braiins-toolbox --version >/dev/null 2>&1 || verify/braiins-toolbox --help >/dev/null 2>&1
 unsquashfs -cat verify/filesystem.squashfs etc/systemd/system/nexhash.service | grep -q 'Restart=always'
 unsquashfs -cat verify/filesystem.squashfs etc/systemd/system/nexhash-asic-watchdog.service | grep -q 'ASIC Auto-Recovery Watchdog'
 unsquashfs -cat verify/filesystem.squashfs usr/local/lib/nexhash/asic_watchdog.py | grep -q 'RESFRIANDO'
@@ -604,6 +620,7 @@ test "$(stat -c%s "$DEST")" -gt 3000000000
   echo "NexHash Commercial V1.5 payload embedded: OK"
   echo "NexHash server systemd service/restart policy: OK"
   echo "NexHash Opera autostart to local server: OK"
+  echo "Braiins Toolbox 26.09 verified: OK"
   echo "ASIC watchdog automatic recovery: OK"
   echo "ASIC cooling countdown before recovery: 180s"
   echo "ASIC post-restart stabilization: 240s"
