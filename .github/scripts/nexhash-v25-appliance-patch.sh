@@ -343,8 +343,8 @@ grep -q '127.0.0.1:8787' rootfs25/usr/local/bin/nexhash-healthcheck
 grep -q 'generate-secrets' rootfs25/usr/local/bin/nexhash-firstboot-provision
 grep -q 'tailscale up --authkey' rootfs25/usr/local/bin/nexhash-tailscale-autoconnect
 grep -q 'opera --start-maximized' rootfs25/usr/local/bin/nexhash-wait-open
-test -e rootfs25/etc/systemd/system/multi-user.target.wants/nexhash.service
-test -e rootfs25/etc/systemd/system/timers.target.wants/nexhash-healthcheck.timer
+test -L rootfs25/etc/systemd/system/multi-user.target.wants/nexhash.service
+test -L rootfs25/etc/systemd/system/timers.target.wants/nexhash-healthcheck.timer
 
 echo "[5/8] Repack filesystem"
 sudo mksquashfs rootfs25 work25/filesystem-new.squashfs -comp xz -b 1M -noappend >/dev/null
@@ -364,7 +364,46 @@ unsquashfs -cat verify25/filesystem.squashfs etc/skel/.config/autostart/nexhash-
 unsquashfs -cat verify25/filesystem.squashfs opt/nexhash/current/.nexhash-v15-present | grep -q 'Commercial V1.5'
 unsquashfs -cat verify25/filesystem.squashfs var/lib/dpkg/status > verify25/status
 grep -q '^Package: docker.io$' verify25/status
-grep -Eq '^Package: docker-compose(-v2)?
+grep -Eq '^Package: docker-compose(-v2)?grep -q '^Package: opera-stable$' verify25/status
+grep -q '^Package: tailscale$' verify25/status
+
+echo "[8/8] Checksums"
+sha256sum "$DEST" | tee "$OUT_DIR/NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso.sha256"
+cat > "$OUT_DIR/FINAL-VALIDATED.txt" <<EOF_FINAL
+NEXHASH EDGEOS 2.5 APPLIANCE FINAL
+Commercial V1.5 payload: OK
+First-boot unique secret provisioning: OK
+Tailscale persistent/autokey bootstrap: OK
+nexhash.service boot autostart: OK
+Restart=always: OK
+Healthcheck/recovery timer: OK
+Port 8787 target: OK
+Docker + Compose runtime: OK
+Tailscale service dependency: OK
+Opera NexHash autostart: OK
+2.4 network/DNS/sudo/battery fixes inherited: OK
+EOF_FINAL
+ verify25/status
+grep -q '^Package: opera-stable$' verify25/status
+grep -q '^Package: tailscale$' verify25/status
+
+echo "[8/8] Checksums"
+sha256sum "$DEST" | tee "$OUT_DIR/NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso.sha256"
+cat > "$OUT_DIR/FINAL-VALIDATED.txt" <<EOF_FINAL
+NEXHASH EDGEOS 2.5 APPLIANCE FINAL
+Commercial V1.5 payload: OK
+First-boot unique secret provisioning: OK
+Tailscale persistent/autokey bootstrap: OK
+nexhash.service boot autostart: OK
+Restart=always: OK
+Healthcheck/recovery timer: OK
+Port 8787 target: OK
+Docker + Compose runtime: OK
+Tailscale service dependency: OK
+Opera NexHash autostart: OK
+2.4 network/DNS/sudo/battery fixes inherited: OK
+EOF_FINAL
+ verify25/status
 grep -q '^Package: opera-stable$' verify25/status
 grep -q '^Package: tailscale$' verify25/status
 
