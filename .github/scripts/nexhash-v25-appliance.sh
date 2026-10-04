@@ -343,7 +343,7 @@ def nexhash_api_action(m, action):
     try:
         body=json.dumps({"action":act}).encode()
         req=urllib.request.Request(
-            f"http://127.0.0.1:8787/api/miners/{urllib.parse.quote(mid,safe='')}/action",
+            f"http://127.0.0.1:8787/api/internal/watchdog/miners/{urllib.parse.quote(mid,safe='')}/action",
             data=body,method="POST",
             headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}
         )
@@ -357,7 +357,7 @@ def nexhash_api_action(m, action):
         return False
 
 def nexhash_snapshot(m):
-    data=http_json("http://127.0.0.1:8787/api/miners",2,nexhash_headers())
+    data=http_json("http://127.0.0.1:8787/api/internal/watchdog/miners",2,nexhash_headers())
     if not isinstance(data,list): return None
     mid=str(m.get("id") or "")
     ip=str(m.get("ip") or "")
