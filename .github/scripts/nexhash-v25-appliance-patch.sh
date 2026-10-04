@@ -36,7 +36,7 @@ EOF_APT
 find /etc/apt/sources.list.d -type f -print0 2>/dev/null | xargs -0 -r sed -i '/file:\/run\/live\/medium/d' || true
 
 apt-get update
-apt-get install -y docker.io docker-compose-v2 curl jq ca-certificates
+apt-get install -y docker.io docker-compose curl jq ca-certificates
 systemctl enable docker.service containerd.service NetworkManager.service tailscaled.service || true
 
 install -d -m 0755 /opt/nexhash/current /opt/nexhash/releases /var/lib/nexhash /etc/nexhash /usr/local/lib/nexhash
@@ -57,10 +57,18 @@ for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml docker-
   [ -f "$f" ] && { COMPOSE="$f"; break; }
 done
 if [ -n "$COMPOSE" ]; then
-  if [ -f .env ]; then
-    exec /usr/bin/docker compose -f "$COMPOSE" --env-file .env up --build
+  if /usr/bin/docker compose version >/dev/null 2>&1; then
+    DC="/usr/bin/docker compose"
+  elif command -v docker-compose >/dev/null 2>&1; then
+    DC="$(command -v docker-compose)"
   else
-    exec /usr/bin/docker compose -f "$COMPOSE" up --build
+    echo "Docker Compose runtime not found" >&2
+    exit 79
+  fi
+  if [ -f .env ]; then
+    exec $DC -f "$COMPOSE" --env-file .env up --build
+  else
+    exec $DC -f "$COMPOSE" up --build
   fi
 fi
 
@@ -80,7 +88,11 @@ cat > /usr/local/bin/nexhash-app-stop <<'EOF_STOP'
 set -u
 cd /opt/nexhash/current 2>/dev/null || exit 0
 if [ -f docker-compose.yml ] || [ -f compose.yml ] || [ -f compose.yaml ]; then
+  if /usr/bin/docker compose version >/dev/null 2>&1; then
   /usr/bin/docker compose down --remove-orphans || true
+elif command -v docker-compose >/dev/null 2>&1; then
+  docker-compose down --remove-orphans || true
+fi
 fi
 EOF_STOP
 chmod +x /usr/local/bin/nexhash-app-stop
@@ -352,7 +364,27 @@ unsquashfs -cat verify25/filesystem.squashfs etc/skel/.config/autostart/nexhash-
 unsquashfs -cat verify25/filesystem.squashfs opt/nexhash/current/.nexhash-v15-present | grep -q 'Commercial V1.5'
 unsquashfs -cat verify25/filesystem.squashfs var/lib/dpkg/status > verify25/status
 grep -q '^Package: docker.io$' verify25/status
-grep -q '^Package: docker-compose-v2$' verify25/status
+grep -Eq '^Package: docker-compose(-v2)?
+grep -q '^Package: opera-stable$' verify25/status
+grep -q '^Package: tailscale$' verify25/status
+
+echo "[8/8] Checksums"
+sha256sum "$DEST" | tee "$OUT_DIR/NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso.sha256"
+cat > "$OUT_DIR/FINAL-VALIDATED.txt" <<EOF_FINAL
+NEXHASH EDGEOS 2.5 APPLIANCE FINAL
+Commercial V1.5 payload: OK
+First-boot unique secret provisioning: OK
+Tailscale persistent/autokey bootstrap: OK
+nexhash.service boot autostart: OK
+Restart=always: OK
+Healthcheck/recovery timer: OK
+Port 8787 target: OK
+Docker + Compose runtime: OK
+Tailscale service dependency: OK
+Opera NexHash autostart: OK
+2.4 network/DNS/sudo/battery fixes inherited: OK
+EOF_FINAL
+ verify25/status
 grep -q '^Package: opera-stable$' verify25/status
 grep -q '^Package: tailscale$' verify25/status
 
