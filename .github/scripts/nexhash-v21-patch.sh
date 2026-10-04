@@ -7,7 +7,7 @@ SRC="$(find "$SRC_DIR" -type f -name '*.iso' | head -n1)"
 test -s "$SRC"
 
 sudo apt-get update >/dev/null
-sudo apt-get install -y xorriso squashfs-tools curl >/dev/null
+sudo apt-get install -y xorriso squashfs-tools curl unzip >/dev/null
 
 rm -rf work rootfs "$OUT_DIR"
 mkdir -p work rootfs "$OUT_DIR"
@@ -473,6 +473,33 @@ sudo rm -f rootfs/etc/resolv.conf
 printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee rootfs/etc/resolv.conf >/dev/null
 sudo chmod 0644 rootfs/etc/resolv.conf
 
+echo "[3a/7] Embedding NexHash v5.2.2 Commercial V1.5 Production Cloud..."
+APP_ZIP="$(find bundle -maxdepth 1 -type f -name 'NexHash-v5.2.2-Commercial-V1.5-Production-Cloud.zip' | head -n1 || true)"
+test -n "$APP_ZIP"
+test -s "$APP_ZIP"
+sudo rm -rf rootfs/opt/nexhash/current rootfs/tmp/nexhash-app-unpack
+sudo mkdir -p rootfs/opt/nexhash/current rootfs/tmp/nexhash-app-unpack
+sudo unzip -q "$APP_ZIP" -d rootfs/tmp/nexhash-app-unpack
+
+# Flatten a single wrapper directory, common in generated ZIP releases.
+TOP_COUNT="$(sudo find rootfs/tmp/nexhash-app-unpack -mindepth 1 -maxdepth 1 | wc -l)"
+TOP_DIR="$(sudo find rootfs/tmp/nexhash-app-unpack -mindepth 1 -maxdepth 1 -type d | head -n1 || true)"
+TOP_FILE_COUNT="$(sudo find rootfs/tmp/nexhash-app-unpack -mindepth 1 -maxdepth 1 -type f | wc -l)"
+if [ "$TOP_COUNT" -eq 1 ] && [ "$TOP_FILE_COUNT" -eq 0 ] && [ -n "$TOP_DIR" ]; then
+  sudo cp -a "$TOP_DIR"/. rootfs/opt/nexhash/current/
+else
+  sudo cp -a rootfs/tmp/nexhash-app-unpack/. rootfs/opt/nexhash/current/
+fi
+sudo rm -rf rootfs/tmp/nexhash-app-unpack
+sudo chown -R root:root rootfs/opt/nexhash/current
+
+# Production Cloud release must include at least one known deployment marker.
+if ! sudo find rootfs/opt/nexhash/current -maxdepth 3 \( -name 'docker-compose.yml' -o -name 'docker-compose.yaml' -o -name 'compose.yml' -o -name 'compose.yaml' -o -name 'HOSPEDAR-NEXHASH-CLOUD.md' -o -name 'README-RAPIDO.txt' \) | grep -q .; then
+  echo "NexHash V1.5 deployment markers not found after extraction" >&2
+  sudo find rootfs/opt/nexhash/current -maxdepth 3 -type f | head -100 >&2
+  exit 1
+fi
+
 echo "[3b/7] Installing NexHash appliance/server/watchdog layer..."
 sudo bash .github/scripts/nexhash-v25-appliance.sh rootfs
 
@@ -528,6 +555,9 @@ unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-desktop-setup |
 unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-welcome | grep -q 'NexHash <span'
 unsquashfs -cat verify/filesystem.squashfs etc/skel/.config/autostart/nexhash-welcome.desktop | grep -q 'nexhash-welcome'
 unsquashfs -cat verify/filesystem.squashfs usr/share/applications/nexhash-welcome.desktop | grep -q 'Central de controle'
+# Real V1.5 app payload must be inside the final ISO, not just the appliance bootstrap.
+unsquashfs -ll verify/filesystem.squashfs > verify/squashfs-list.txt
+grep -Eq 'opt/nexhash/current/.+(docker-compose\.ya?ml|compose\.ya?ml|HOSPEDAR-NEXHASH-CLOUD\.md|README-RAPIDO\.txt)' verify/squashfs-list.txt
 unsquashfs -cat verify/filesystem.squashfs etc/systemd/system/nexhash.service | grep -q 'Restart=always'
 unsquashfs -cat verify/filesystem.squashfs etc/systemd/system/nexhash-asic-watchdog.service | grep -q 'ASIC Auto-Recovery Watchdog'
 unsquashfs -cat verify/filesystem.squashfs usr/local/lib/nexhash/asic_watchdog.py | grep -q 'RESFRIANDO'
@@ -571,6 +601,7 @@ test "$(stat -c%s "$DEST")" -gt 3000000000
   echo "NexHash live/admin sudo without broken password prompt: OK"
   echo "Internet reachability status in Welcome: OK"
   echo "NexHash product welcome center: OK"
+  echo "NexHash Commercial V1.5 payload embedded: OK"
   echo "NexHash server systemd service/restart policy: OK"
   echo "NexHash Opera autostart to local server: OK"
   echo "ASIC watchdog automatic recovery: OK"
