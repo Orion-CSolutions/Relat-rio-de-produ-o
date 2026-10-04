@@ -471,6 +471,16 @@ sudo rm -f rootfs/etc/resolv.conf
 printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee rootfs/etc/resolv.conf >/dev/null
 sudo chmod 0644 rootfs/etc/resolv.conf
 
+echo "[3b/7] Installing NexHash appliance/server/watchdog layer..."
+sudo bash .github/scripts/nexhash-v25-appliance.sh rootfs
+
+# Ensure core runtime dependencies for the embedded appliance layer exist.
+sudo test -x rootfs/usr/local/bin/nexhash-run
+sudo test -x rootfs/usr/local/bin/nexhashctl
+sudo test -f rootfs/etc/systemd/system/nexhash.service
+sudo test -f rootfs/etc/systemd/system/nexhash-asic-watchdog.service
+sudo test -f rootfs/usr/local/lib/nexhash/asic_watchdog.py
+
 echo "[4/7] Repacking live filesystem..."
 sudo mksquashfs rootfs work/filesystem-new.squashfs -comp xz -b 1M -noappend >/dev/null
 
@@ -485,7 +495,7 @@ grep -q "Install NexHash EdgeOS" work/grub.cfg
 grep -q "nexhash-installer=1" work/grub.cfg
 
 echo "[6/7] Building ISO..."
-DEST="$OUT_DIR/NexHash-EdgeOS-2.4-STABLE-FINAL-Install-amd64.iso"
+DEST="$OUT_DIR/NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso"
 xorriso   -indev "$SRC"   -outdev "$DEST"   -boot_image any replay   -map work/filesystem-new.squashfs /live/filesystem.squashfs   -commit >/dev/null
 
 test -s "$DEST"
@@ -516,6 +526,14 @@ unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-desktop-setup |
 unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-welcome | grep -q 'NexHash <span'
 unsquashfs -cat verify/filesystem.squashfs etc/skel/.config/autostart/nexhash-welcome.desktop | grep -q 'nexhash-welcome'
 unsquashfs -cat verify/filesystem.squashfs usr/share/applications/nexhash-welcome.desktop | grep -q 'Central de controle'
+unsquashfs -cat verify/filesystem.squashfs etc/systemd/system/nexhash.service | grep -q 'Restart=always'
+unsquashfs -cat verify/filesystem.squashfs etc/systemd/system/nexhash-asic-watchdog.service | grep -q 'ASIC Auto-Recovery Watchdog'
+unsquashfs -cat verify/filesystem.squashfs usr/local/lib/nexhash/asic_watchdog.py | grep -q 'RESFRIANDO'
+unsquashfs -cat verify/filesystem.squashfs usr/local/lib/nexhash/asic_watchdog.py | grep -q 'ASIC_MAX_RETRIES'
+unsquashfs -cat verify/filesystem.squashfs etc/nexhash/device.env | grep -q 'ASIC_COOLDOWN_SECONDS=180'
+unsquashfs -cat verify/filesystem.squashfs etc/nexhash/device.env | grep -q 'ASIC_STABILIZE_SECONDS=240'
+unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-open | grep -q '127.0.0.1'
+unsquashfs -cat verify/filesystem.squashfs etc/skel/.config/autostart/nexhash-open.desktop | grep -q 'nexhash-open'
 unsquashfs -cat verify/filesystem.squashfs etc/sudoers.d/90-nexhash-edgeos > verify/nexhash-sudoers
 grep -q '^nexhash .*NOPASSWD: ALL' verify/nexhash-sudoers
 grep -q '^%sudo .*NOPASSWD: ALL' verify/nexhash-sudoers
@@ -536,7 +554,7 @@ grep -q '^Package: python3-pyqt5$' verify/status
 test "$(stat -c%s "$DEST")" -gt 3000000000
 
 {
-  echo "NEXHASH EDGEOS 2.4 STABLE FINAL ISO VALIDATED"
+  echo "NEXHASH EDGEOS 2.5 APPLIANCE FINAL ISO VALIDATED"
   echo "BIOS installer menu: OK"
   echo "UEFI installer menu: OK"
   echo "nexhash-installer=1: OK"
@@ -551,6 +569,12 @@ test "$(stat -c%s "$DEST")" -gt 3000000000
   echo "NexHash live/admin sudo without broken password prompt: OK"
   echo "Internet reachability status in Welcome: OK"
   echo "NexHash product welcome center: OK"
+  echo "NexHash server systemd service/restart policy: OK"
+  echo "NexHash Opera autostart to local server: OK"
+  echo "ASIC watchdog automatic recovery: OK"
+  echo "ASIC cooling countdown before recovery: 180s"
+  echo "ASIC post-restart stabilization: 240s"
+  echo "ASIC retry/loop protection: OK"
   echo "NexHash branding/icon/theme: OK"
   echo "Opera: OK"
   echo "Tailscale: OK"
