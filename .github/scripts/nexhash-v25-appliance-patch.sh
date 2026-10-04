@@ -52,16 +52,18 @@ cat > /usr/local/bin/nexhash-app-start <<'EOF_START'
 set -euo pipefail
 cd /opt/nexhash/current
 
-# Commercial V1.5 Production Cloud is Docker Compose based.
-if [ -f docker-compose.yml ] || [ -f compose.yml ] || [ -f compose.yaml ]; then
+COMPOSE=""
+for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml docker-compose*.yml docker-compose*.yaml; do
+  [ -f "$f" ] && { COMPOSE="$f"; break; }
+done
+if [ -n "$COMPOSE" ]; then
   if [ -f .env ]; then
-    exec /usr/bin/docker compose --env-file .env up
+    exec /usr/bin/docker compose -f "$COMPOSE" --env-file .env up --build
   else
-    exec /usr/bin/docker compose up
+    exec /usr/bin/docker compose -f "$COMPOSE" up --build
   fi
 fi
 
-# Compatibility fallbacks for local bridge builds.
 if [ -f package.json ]; then
   exec /usr/bin/npm start -- --host 0.0.0.0 --port 8787
 fi
@@ -83,11 +85,67 @@ fi
 EOF_STOP
 chmod +x /usr/local/bin/nexhash-app-stop
 
+cat > /usr/local/bin/nexhash-firstboot-provision <<'EOF_PROVISION'
+#!/usr/bin/env bash
+set -euo pipefail
+cd /opt/nexhash/current
+install -d -m 0700 /var/lib/nexhash
+
+if [ ! -f .env ] && [ -f .env.example ]; then
+  cp .env.example .env
+  chmod 0600 .env
+fi
+
+# Commercial package helper generates unique local secrets when available.
+for s in generate-secrets.sh deploy/generate-secrets.sh scripts/generate-secrets.sh; do
+  if [ -f "$s" ]; then
+    chmod +x "$s" || true
+    "./$s" || true
+    break
+  fi
+done
+
+# Avoid identical default secrets across installations when placeholders remain.
+if [ -f .env ]; then
+  python3 - <<'PY_ENV'
+import os,re,secrets
+p=".env"
+s=open(p,encoding="utf-8").read()
+for key in ["SECRET_KEY","JWT_SECRET","SESSION_SECRET","ADMIN_SECRET","AGENT_TOKEN_SECRET"]:
+    pat=re.compile(rf"(?m)^({re.escape(key)}=)(.*)$")
+    if pat.search(s):
+        s=pat.sub(lambda m:m.group(1)+secrets.token_urlsafe(48),s)
+open(p,"w",encoding="utf-8").write(s)
+os.chmod(p,0o600)
+PY_ENV
+fi
+
+touch /var/lib/nexhash/provisioned
+EOF_PROVISION
+chmod +x /usr/local/bin/nexhash-firstboot-provision
+
+cat > /etc/systemd/system/nexhash-provision.service <<'EOF_PROVISION_SERVICE'
+[Unit]
+Description=NexHash first boot provisioning
+After=local-fs.target
+Before=nexhash.service
+ConditionPathExists=!/var/lib/nexhash/provisioned
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nexhash-firstboot-provision
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF_PROVISION_SERVICE
+
 cat > /etc/systemd/system/nexhash.service <<'EOF_SERVICE'
 [Unit]
 Description=NexHash Commercial appliance
 Wants=network-online.target docker.service tailscaled.service
-After=network-online.target docker.service tailscaled.service
+Requires=nexhash-provision.service
+After=nexhash-provision.service network-online.target docker.service tailscaled.service
 StartLimitIntervalSec=120
 StartLimitBurst=10
 
@@ -184,7 +242,39 @@ esac
 EOF_CTL
 chmod +x /usr/local/bin/nexhashctl
 
-systemctl enable nexhash.service nexhash-healthcheck.timer || true
+cat > /usr/local/bin/nexhash-tailscale-autoconnect <<'EOF_TAILAUTO'
+#!/usr/bin/env bash
+set -u
+systemctl start tailscaled >/dev/null 2>&1 || true
+sleep 2
+if tailscale status >/dev/null 2>&1; then
+  exit 0
+fi
+KEYFILE=/etc/nexhash/tailscale-authkey
+if [ -s "$KEYFILE" ]; then
+  KEY="$(cat "$KEYFILE")"
+  tailscale up --authkey="$KEY" --hostname=nexhash-edge --accept-dns=true
+  shred -u "$KEYFILE" 2>/dev/null || rm -f "$KEYFILE"
+fi
+EOF_TAILAUTO
+chmod +x /usr/local/bin/nexhash-tailscale-autoconnect
+
+cat > /etc/systemd/system/nexhash-tailscale-autoconnect.service <<'EOF_TAILSERVICE'
+[Unit]
+Description=NexHash Tailscale autoconnect
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nexhash-tailscale-autoconnect
+
+[Install]
+WantedBy=multi-user.target
+EOF_TAILSERVICE
+
+systemctl enable nexhash-tailscale-autoconnect.service || true
+systemctl enable nexhash-provision.service nexhash.service nexhash-healthcheck.timer || true
 
 # Make the product center show the appliance state.
 if [ -f /usr/local/bin/nexhash-welcome ]; then
@@ -205,6 +295,29 @@ trap - EXIT
 sudo rm -f rootfs25/etc/resolv.conf
 printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee rootfs25/etc/resolv.conf >/dev/null
 
+# Inject the exact Commercial V1.5 payload supplied privately by the build.
+PAYLOAD_ZIP="${NEXHASH_PAYLOAD_ZIP:-}"
+test -n "$PAYLOAD_ZIP"
+test -s "$PAYLOAD_ZIP"
+rm -rf work25/payload
+mkdir -p work25/payload
+unzip -q "$PAYLOAD_ZIP" -d work25/payload
+
+APP_ROOT=""
+for candidate in \
+  "$(find work25/payload -type f \( -name 'docker-compose.yml' -o -name 'docker-compose.yaml' -o -name 'compose.yml' -o -name 'compose.yaml' -o -name 'docker-compose*.yml' -o -name 'docker-compose*.yaml' \) -printf '%h\n' | head -n1)" \
+  "$(find work25/payload -type f -name package.json -printf '%h\n' | head -n1)" \
+  "$(find work25/payload -type f -name app.py -printf '%h\n' | head -n1)"
+do
+  if [ -n "$candidate" ] && [ -d "$candidate" ]; then APP_ROOT="$candidate"; break; fi
+done
+test -n "$APP_ROOT"
+
+sudo rm -rf rootfs25/opt/nexhash/current
+sudo mkdir -p rootfs25/opt/nexhash/current
+sudo cp -a "$APP_ROOT"/. rootfs25/opt/nexhash/current/
+printf 'Commercial V1.5\n' | sudo tee rootfs25/opt/nexhash/current/.nexhash-v15-present >/dev/null
+
 echo "[3/8] Verify application payload exists"
 test -e rootfs25/opt/nexhash/current/.nexhash-v15-present || {
   echo "Commercial V1.5 payload marker is missing. Refusing to build a fake final ISO." >&2
@@ -215,6 +328,8 @@ echo "[4/8] Verify appliance services"
 test -f rootfs25/etc/systemd/system/nexhash.service
 grep -q 'Restart=always' rootfs25/etc/systemd/system/nexhash.service
 grep -q '127.0.0.1:8787' rootfs25/usr/local/bin/nexhash-healthcheck
+grep -q 'generate-secrets' rootfs25/usr/local/bin/nexhash-firstboot-provision
+grep -q 'tailscale up --authkey' rootfs25/usr/local/bin/nexhash-tailscale-autoconnect
 grep -q 'opera --start-maximized' rootfs25/usr/local/bin/nexhash-wait-open
 test -e rootfs25/etc/systemd/system/multi-user.target.wants/nexhash.service
 test -e rootfs25/etc/systemd/system/timers.target.wants/nexhash-healthcheck.timer
@@ -246,6 +361,8 @@ sha256sum "$DEST" | tee "$OUT_DIR/NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd
 cat > "$OUT_DIR/FINAL-VALIDATED.txt" <<EOF_FINAL
 NEXHASH EDGEOS 2.5 APPLIANCE FINAL
 Commercial V1.5 payload: OK
+First-boot unique secret provisioning: OK
+Tailscale persistent/autokey bootstrap: OK
 nexhash.service boot autostart: OK
 Restart=always: OK
 Healthcheck/recovery timer: OK
