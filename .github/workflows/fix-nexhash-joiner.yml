@@ -1,0 +1,98 @@
+name: Fix NexHash ISO Joiner
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-nexhash-joiner.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create robust Windows joiner
+        shell: bash
+        run: |
+          mkdir -p out
+          cat > out/JUNTAR-ISO-WINDOWS-v2.bat <<'BAT'
+          @echo off
+          setlocal
+          cd /d "%~dp0"
+          title NexHash EdgeOS 2.5 - Montar ISO
+
+          set "P1=NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-00"
+          set "P2=NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-01"
+          set "OUT=NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso"
+
+          echo.
+          echo ================================================
+          echo   NexHash EdgeOS 2.5 - Montando ISO
+          echo ================================================
+          echo.
+          echo Pasta:
+          echo %CD%
+          echo.
+
+          if not exist "%P1%" (
+            echo ERRO: Nao encontrei %P1%
+            echo Coloque este BAT na mesma pasta das duas partes.
+            pause
+            exit /b 1
+          )
+
+          if not exist "%P2%" (
+            echo ERRO: Nao encontrei %P2%
+            echo Coloque este BAT na mesma pasta das duas partes.
+            pause
+            exit /b 1
+          )
+
+          if exist "%OUT%" del /f /q "%OUT%"
+
+          echo Juntando as duas partes. Pode demorar alguns minutos...
+          echo.
+          copy /b "%P1%"+"%P2%" "%OUT%" >nul
+
+          if errorlevel 1 (
+            echo.
+            echo ERRO ao juntar os arquivos.
+            pause
+            exit /b 1
+          )
+
+          if not exist "%OUT%" (
+            echo.
+            echo ERRO: a ISO nao foi criada.
+            pause
+            exit /b 1
+          )
+
+          echo.
+          echo ================================================
+          echo   CONCLUIDO
+          echo ================================================
+          echo.
+          echo ISO criada em:
+          echo %CD%\%OUT%
+          echo.
+          for %%A in ("%OUT%") do echo Tamanho: %%~zA bytes
+          echo.
+          echo Abrindo a pasta e selecionando a ISO...
+          explorer.exe /select,"%CD%\%OUT%"
+          echo.
+          pause
+          endlocal
+          BAT
+
+      - name: Upload fixed joiner to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release upload v2.5-appliance-final out/JUNTAR-ISO-WINDOWS-v2.bat --clobber
