@@ -846,7 +846,7 @@ sudo grep -q 'NEXHASH_EDGEOS_INTERNAL_WATCHDOG' rootfs/opt/nexhash/current/serve
 # Prepare the LOCAL EdgeOS runtime at build time so first boot does not spend
 # minutes on npm install and works even before external package mirrors respond.
 if sudo test -f rootfs/opt/nexhash/current/package.json; then
-  sudo chroot rootfs /bin/bash -lc 'cd /opt/nexhash/current && npm install --omit=dev'
+  sudo npm --prefix rootfs/opt/nexhash/current install --omit=dev --no-audit --no-fund
 fi
 sudo test -d rootfs/opt/nexhash/current/node_modules/express
 
