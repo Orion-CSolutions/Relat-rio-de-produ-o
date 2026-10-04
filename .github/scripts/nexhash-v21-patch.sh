@@ -516,6 +516,18 @@ fi
 sudo rm -rf rootfs/tmp/nexhash-app-unpack
 sudo chown -R root:root rootfs/opt/nexhash/current
 
+# Prepare the LOCAL EdgeOS runtime at build time so first boot does not spend
+# minutes on npm install and works even before external package mirrors respond.
+if sudo test -f rootfs/opt/nexhash/current/package.json; then
+  sudo chroot rootfs /bin/bash -lc 'cd /opt/nexhash/current && npm install --omit=dev'
+fi
+sudo test -d rootfs/opt/nexhash/current/node_modules/express
+
+# Seed local .env; nexhash-run normalizes the bridge token on first boot.
+if sudo test ! -f rootfs/opt/nexhash/current/.env && sudo test -f rootfs/opt/nexhash/current/.env.example; then
+  sudo cp rootfs/opt/nexhash/current/.env.example rootfs/opt/nexhash/current/.env
+fi
+
 # Production Cloud release must include at least one known deployment marker.
 if ! sudo find rootfs/opt/nexhash/current -maxdepth 3 \( -name 'docker-compose.yml' -o -name 'docker-compose.yaml' -o -name 'compose.yml' -o -name 'compose.yaml' -o -name 'HOSPEDAR-NEXHASH-CLOUD.md' -o -name 'README-RAPIDO.txt' \) | grep -q .; then
   echo "NexHash V1.5 deployment markers not found after extraction" >&2
@@ -581,6 +593,11 @@ unsquashfs -cat verify/filesystem.squashfs usr/share/applications/nexhash-welcom
 # Real V1.5 app payload must be inside the final ISO, not just the appliance bootstrap.
 unsquashfs -ll verify/filesystem.squashfs > verify/squashfs-list.txt
 grep -Eq 'opt/nexhash/current/.+(docker-compose\.ya?ml|compose\.ya?ml|HOSPEDAR-NEXHASH-CLOUD\.md|README-RAPIDO\.txt)' verify/squashfs-list.txt
+grep -q 'opt/nexhash/current/server.js' verify/squashfs-list.txt
+grep -q 'opt/nexhash/current/public/app.js' verify/squashfs-list.txt
+grep -q 'opt/nexhash/current/node_modules/express' verify/squashfs-list.txt
+unsquashfs -cat verify/filesystem.squashfs opt/nexhash/current/package.json | grep -q '5.2.2-commercial-v1.5'
+unsquashfs -cat verify/filesystem.squashfs opt/nexhash/current/.env | grep -q '^PORT=8787'
 unsquashfs -cat verify/filesystem.squashfs usr/local/bin/braiins-toolbox > verify/braiins-toolbox
 test -s verify/braiins-toolbox
 chmod +x verify/braiins-toolbox
@@ -632,6 +649,8 @@ test "$(stat -c%s "$DEST")" -gt 3000000000
   echo "NexHash product welcome center: OK"
   echo "NexHash server/watchdog live status in welcome center: OK"
   echo "NexHash Commercial V1.5 payload embedded: OK"
+  echo "NexHash local server.js + node_modules preinstalled: OK"
+  echo "NexHash local port 8787 environment: OK"
   echo "NexHash server systemd service/restart policy: OK"
   echo "NexHash Opera autostart to local server: OK"
   echo "Braiins Toolbox 26.09 verified: OK"
