@@ -1,0 +1,107 @@
+name: NexHash EdgeOS 2.5 Appliance Private Build
+
+on:
+  push:
+    branches: [nexhash-v25-temp]
+    paths:
+      - '.github/workflows/nexhash-v25-temp-private-build.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build helpers
+        run: |
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y jq unzip xorriso squashfs-tools curl >/dev/null
+
+      - name: Download NexHash EdgeOS 2.4 base
+        uses: actions/download-artifact@v4
+        with:
+          name: NexHash-EdgeOS-2.4-STABLE-FINAL-Install-amd64
+          path: source-artifact
+          run-id: 37163943928
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Reassemble private NexHash V1.5 payload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p source /tmp/nexhash-payload
+          BASE_ISO="$(find source-artifact -type f -name '*.iso' | head -n1)"
+          test -s "$BASE_ISO"
+          cp "$BASE_ISO" source/NexHash-EdgeOS-2.4-STABLE-FINAL-Install-amd64.iso
+
+          : > /tmp/NexHash-v5.2.2-Commercial-V1.5-Production-Cloud.zip
+          for SHA in 44d66816d9b0f9c3f9bba9b73ede6f4e12f506e9 358a1207660265c4671c44e6067426c16ef2fcd1 440130a766d0b504ef1c9d8194ecf974085c3670 b0058db02072179015763f4f97f4abae4e2ed51a 61e355a1f4ae36f7fe2c3f6e1df7259ba92a04ed 5266d4df7d17f110749cf0d0d7fab0f5fad6de3c 2562dd387341413b0c9c0489fa119247c86d850d a9cf3a90486b33b719f7793c95935501cae9e082 80dfe9b02901d420481ca1ba4919e7b3e67f4bcf 8ce8bd66bbb4a1b5e0813445c536f71f310d5fc3; do
+            curl -fsSL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/Orion-CSolutions/Relat-rio-de-produ-o/git/blobs/$SHA" \
+              | jq -r '.content' | tr -d '\n' | base64 -d \
+              >> /tmp/NexHash-v5.2.2-Commercial-V1.5-Production-Cloud.zip
+          done
+
+          test "$(stat -c%s /tmp/NexHash-v5.2.2-Commercial-V1.5-Production-Cloud.zip)" -eq 12398061
+          unzip -t /tmp/NexHash-v5.2.2-Commercial-V1.5-Production-Cloud.zip >/dev/null
+
+          echo "Payload ZIP OK"
+          unzip -l /tmp/NexHash-v5.2.2-Commercial-V1.5-Production-Cloud.zip \
+            | grep -E 'docker-compose|compose\.ya?ml|\.env\.example|generate-secrets|README|Dockerfile' \
+            | head -80 || true
+
+      - name: Build NexHash EdgeOS 2.5 Appliance
+        env:
+          NEXHASH_PAYLOAD_ZIP: /tmp/NexHash-v5.2.2-Commercial-V1.5-Production-Cloud.zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/nexhash-v25-appliance-patch.sh source out
+
+      - name: Inspect final appliance
+        shell: bash
+        run: |
+          set -euo pipefail
+          ISO="out/NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso"
+          test -s "$ISO"
+          cat out/FINAL-VALIDATED.txt
+          sha256sum "$ISO"
+          test "$(stat -c%s "$ISO")" -gt 3000000000
+
+      - name: Upload final ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64
+          path: |
+            out/NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso
+            out/NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso.sha256
+            out/FINAL-VALIDATED.txt
+          compression-level: 0
+          retention-days: 3
+
+      - name: Split final ISO
+        shell: bash
+        run: |
+          set -euo pipefail
+          ISO="out/NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso"
+          split -b 450M -d -a 2 "$ISO" out/final25-part-
+          sha256sum out/final25-part-* > out/final25-parts.sha256
+
+      - name: Upload split ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexHash-EdgeOS-2.5-APPLIANCE-FINAL-parts
+          path: |
+            out/final25-part-*
+            out/final25-parts.sha256
+          compression-level: 0
+          retention-days: 3
