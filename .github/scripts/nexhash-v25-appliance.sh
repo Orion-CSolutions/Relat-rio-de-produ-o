@@ -29,37 +29,33 @@ cd /opt/nexhash/current
 export PORT="${NEXHASH_PORT:-8787}"
 export HOST="${NEXHASH_BIND:-0.0.0.0}"
 
+# EdgeOS is the LOCAL bridge/appliance. Production Cloud Docker Compose stays
+# available under ./deploy but is not auto-started because it expects public
+# DNS domains and Caddy TLS.
+if [ ! -f .env ] && [ -f .env.example ]; then
+  cp .env.example .env
+fi
+
+# Generate a private bridge token on the machine itself, never in public CI.
+if [ -f .env ]; then
+  if grep -Eq '^BRIDGE_TOKEN=(troque-|miner-control-local|$)' .env 2>/dev/null; then
+    TOKEN="$(openssl rand -hex 32 2>/dev/null || python3 -c 'import secrets;print(secrets.token_hex(32))')"
+    sed -i "s#^BRIDGE_TOKEN=.*#BRIDGE_TOKEN=$TOKEN#" .env
+  fi
+fi
+
 if [ -x ./run.sh ]; then exec ./run.sh; fi
 
-# NexHash Commercial V1.5 Production Cloud: prefer the full Docker Compose stack.
-COMPOSE_DIR=""
-for d in . ./deploy; do
-  if [ -f "$d/docker-compose.yml" ] || [ -f "$d/docker-compose.yaml" ] || [ -f "$d/compose.yml" ] || [ -f "$d/compose.yaml" ]; then
-    COMPOSE_DIR="$d"
-    break
+# NexHash V5.2.2 local server is the preferred appliance runtime.
+if [ -f package.json ]; then
+  if [ ! -d node_modules ]; then
+    npm install --omit=dev
   fi
-done
-if [ -n "$COMPOSE_DIR" ]; then
-  cd "$COMPOSE_DIR"
-  if [ ! -f .env ] && [ -f .env.example ]; then
-    cp .env.example .env
-  fi
-  if [ -x ./generate-secrets.sh ]; then
-    ./generate-secrets.sh --non-interactive >/var/log/nexhash/generate-secrets.log 2>&1 || ./generate-secrets.sh >/var/log/nexhash/generate-secrets.log 2>&1 || true
-  fi
-  if docker compose version >/dev/null 2>&1; then
-    exec docker compose --env-file .env up --build --remove-orphans
-  elif command -v docker-compose >/dev/null 2>&1; then
-    exec docker-compose --env-file .env up --build --remove-orphans
+  if node -e 'let p=require("./package.json");process.exit(p.scripts&&p.scripts.start?0:1)'; then
+    exec npm start
   fi
 fi
 
-if [ -f package.json ]; then
-  if [ -f package-lock.json ]; then npm ci --omit=dev || npm install; else npm install; fi
-  if node -e 'let p=require("./package.json");process.exit(p.scripts&&p.scripts.start?0:1)'; then
-    exec npm start -- --hostname "$HOST" --port "$PORT"
-  fi
-fi
 if [ -f requirements.txt ]; then pip3 install --break-system-packages -r requirements.txt; fi
 if [ -f app.py ]; then exec python3 app.py; fi
 if [ -f server.py ]; then exec python3 server.py; fi
@@ -167,8 +163,8 @@ EOF
 cat > "$ROOT/etc/systemd/system/nexhash-tailscale-autoconnect.service" <<'EOF'
 [Unit]
 Description=NexHash Tailscale Auto-Reconnect
-After=network-online.target tailscaled.service docker.service
-Wants=network-online.target docker.service tailscaled.service
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
 
 [Service]
 Type=oneshot
@@ -259,13 +255,16 @@ EOF
 
 cat > "$ROOT/usr/local/lib/nexhash/asic_watchdog.py" <<'PY'
 #!/usr/bin/env python3
-import json, os, socket, subprocess, time, urllib.request, urllib.error
+import json, os, socket, subprocess, time, urllib.request, urllib.error, urllib.parse
 from pathlib import Path
 from datetime import datetime, timezone
 
 STATE=Path("/var/lib/nexhash/asic-watchdog.json")
 LOG=Path("/var/log/nexhash/asic-watchdog.log")
 CFG=Path("/etc/nexhash/miners.json")
+FLEET=Path("/opt/nexhash/current/data/fleet.json")
+APP_ENV=Path("/opt/nexhash/current/.env")
+APP_ENV_EXAMPLE=Path("/opt/nexhash/current/.env.example")
 
 POLL=int(os.getenv("ASIC_POLL_SECONDS","20"))
 FAIL_CONFIRM=int(os.getenv("ASIC_FAILURE_CONFIRMATIONS","3"))
@@ -296,11 +295,30 @@ def tcp(ip,port,timeout=2):
         with socket.create_connection((ip,port),timeout=timeout): return True
     except OSError: return False
 
-def http_json(url,timeout=3):
+def http_json(url,timeout=3,headers=None):
     try:
-        with urllib.request.urlopen(url,timeout=timeout) as r:
+        req=urllib.request.Request(url,headers=headers or {})
+        with urllib.request.urlopen(req,timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8","ignore"))
     except Exception: return None
+
+def read_env(path):
+    out={}
+    try:
+        for raw in Path(path).read_text(encoding="utf-8").splitlines():
+            line=raw.strip()
+            if not line or line.startswith("#") or "=" not in line: continue
+            k,v=line.split("=",1)
+            out[k.strip()]=v.strip().strip('"').strip("'")
+    except Exception: pass
+    return out
+
+def nexhash_token():
+    return read_env(APP_ENV).get("BRIDGE_TOKEN") or read_env(APP_ENV_EXAMPLE).get("BRIDGE_TOKEN") or ""
+
+def nexhash_headers():
+    t=nexhash_token()
+    return {"Authorization":f"Bearer {t}"} if t else {}
 
 def detect_hashrate(m):
     ip=m["ip"]
@@ -312,6 +330,41 @@ def detect_hashrate(m):
             for key in ("hashrate","hash_rate","hashrate_ths","ghs_5s","rate_5s"):
                 v=data.get(key)
                 if isinstance(v,(int,float)): return float(v)
+    return None
+
+def nexhash_api_action(m, action):
+    mid=str(m.get("id") or "")
+    if not mid: return False
+    amap={"stop_miner":"pause","restart_miner":"restart","resume":"resume","reboot":"reboot"}
+    act=amap.get(action)
+    if not act: return False
+    token=nexhash_token()
+    if not token: return False
+    try:
+        body=json.dumps({"action":act}).encode()
+        req=urllib.request.Request(
+            f"http://127.0.0.1:8787/api/miners/{urllib.parse.quote(mid,safe='')}/action",
+            data=body,method="POST",
+            headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}
+        )
+        with urllib.request.urlopen(req,timeout=20) as r:
+            ok=200 <= r.status < 300
+            reply=r.read().decode("utf-8","ignore")[-800:]
+        log(f"NexHash action {act}: HTTP {r.status} {reply}",m.get("name",m.get("ip")))
+        return ok
+    except Exception as e:
+        log(f"NexHash action {act} falhou: {e}",m.get("name",m.get("ip")))
+        return False
+
+def nexhash_snapshot(m):
+    data=http_json("http://127.0.0.1:8787/api/miners",2,nexhash_headers())
+    if not isinstance(data,list): return None
+    mid=str(m.get("id") or "")
+    ip=str(m.get("ip") or "")
+    for row in data:
+        if not isinstance(row,dict): continue
+        if (mid and str(row.get("id") or "")==mid) or str(row.get("host") or row.get("ip") or "")==ip:
+            return row
     return None
 
 def miner_password(m):
@@ -367,7 +420,9 @@ def braiins_action(m, action):
         args=["cooling","set","--fan-paused-mode","manual","--fan-paused-pwm",pwm]
         runtime=os.getenv("BRAIINS_PAUSE_FAN_RUNTIME","indefinitely")
         if runtime:
-            args += ["--fan-pause-runtime",runtime]
+            with_runtime=args+["--fan-pause-runtime",runtime]
+            if toolbox(m,with_runtime): return True
+        # Older BOS versions may support paused fan PWM but not runtime.
         return toolbox(m,args)
 
     if action=="restart_miner":
@@ -387,6 +442,9 @@ def run_action(m, action):
     cmd=cmds.get(action)
     if cmd:
         return subprocess.run(cmd,shell=True,timeout=45).returncode==0
+
+    if action in ("stop_miner","restart_miner","resume","reboot") and nexhash_api_action(m,action):
+        return True
 
     if braiins_action(m,action):
         return True
@@ -444,8 +502,29 @@ def recover(m, st):
     return tcp(m["ip"],int(m.get("port",80)),3)
 
 def unhealthy(m):
-    if not tcp(m["ip"],int(m.get("port",80)),2):
-        return True,"offline"
+    ip=m["ip"]
+    snap=nexhash_snapshot(m)
+
+    # NexHash knows whether telemetry is fresh. If it explicitly reports offline,
+    # treat it as a failure; an intentional paused/running=false miner is not
+    # automatically restarted unless the control process/API itself disappears.
+    if isinstance(snap,dict):
+        if snap.get("online") is False:
+            return True,"NexHash reportou ASIC offline"
+        hr=snap.get("hashrate5s",snap.get("hashrate"))
+        try: hr=float(hr) if hr is not None else None
+        except Exception: hr=None
+        expected=float(m.get("expected_ths",0) or 0)
+        if hr is not None and expected>0 and hr < expected*MIN_RATIO and snap.get("running") is not False:
+            return True,f"hashrate baixo {hr:.2f} < {expected*MIN_RATIO:.2f}"
+
+    web_ok=tcp(ip,int(m.get("port",80)),2)
+    miner_api_ok=tcp(ip,4028,2)
+    if not web_ok and not miner_api_ok:
+        return True,"ASIC/controladora offline"
+    if web_ok and not miner_api_ok and str(m.get("firmware","")).lower() in ("braiins","braiinsos","braiins os","bos","bos+"):
+        return True,"BOSminer API 4028 indisponível"
+
     hr=detect_hashrate(m)
     expected=float(m.get("expected_ths",0) or 0)
     if hr is not None and expected>0 and hr < expected*MIN_RATIO:
@@ -474,19 +553,27 @@ def normalize_miners(obj):
     return out
 
 def get_registered_miners():
-    # Prefer the live NexHash database/API so recovery follows machines configured in the UI.
-    urls=[
-      "http://127.0.0.1:8787/api/miners",
-      "http://127.0.0.1:8787/api/v1/miners",
-      "http://127.0.0.1:8787/api/machines",
-      "http://127.0.0.1:8787/api/v1/machines",
-      "http://127.0.0.1:8787/api/devices"
-    ]
-    for url in urls:
-        data=http_json(url,2)
-        ms=normalize_miners(data)
-        if ms:
-            return ms
+    # 1) NexHash persistent fleet — follows additions/removals made in the UI.
+    persisted=normalize_miners(load_json(FLEET,{"miners":[]}))
+    if persisted:
+        return persisted
+
+    # 2) Authenticated live API.
+    data=http_json("http://127.0.0.1:8787/api/miners",2,nexhash_headers())
+    live=normalize_miners(data)
+    if live:
+        return live
+
+    # 3) Seed MINERS_JSON from the packaged local .env.
+    for p in (APP_ENV,APP_ENV_EXAMPLE):
+        raw=read_env(p).get("MINERS_JSON","")
+        if raw:
+            try:
+                seeded=normalize_miners(json.loads(raw))
+                if seeded: return seeded
+            except Exception: pass
+
+    # 4) Appliance fallback config.
     return normalize_miners(load_json(CFG,{"miners":[]}))
 
 STATE_OBJ=load_json(STATE,{})
