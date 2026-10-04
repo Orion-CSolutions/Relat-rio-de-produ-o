@@ -503,19 +503,39 @@ def recover(m, st):
 
 def unhealthy(m):
     ip=m["ip"]
-    snap=nexhash_snapshot(m)
 
-    # NexHash knows whether telemetry is fresh. If it explicitly reports offline,
-    # treat it as a failure; an intentional paused/running=false miner is not
-    # automatically restarted unless the control process/API itself disappears.
+    # Explicit maintenance is the ONLY condition that suppresses recovery.
+    # This prevents a deliberate service intervention from being undone,
+    # while every unplanned "not mining" state is recovered automatically.
+    if m.get("maintenance") is True or m.get("maintenance_mode") is True or m.get("auto_recovery") is False:
+        return False,"manutenção/auto-recovery desativado"
+
+    snap=nexhash_snapshot(m)
     if isinstance(snap,dict):
         if snap.get("online") is False:
             return True,"NexHash reportou ASIC offline"
+
+        state=str(
+            snap.get("miner_state") or snap.get("state") or snap.get("status") or ""
+        ).strip().lower()
+        if state in ("stopped","stop","error","fault","failed","dead","offline","unreachable","crashed"):
+            return True,f"estado do miner: {state}"
+
+        # If NexHash explicitly says the miner is not running, recover it.
+        # A manual stop must use maintenance_mode/auto_recovery=false.
+        if snap.get("running") is False:
+            return True,"miner/BOSminer parado"
+
         hr=snap.get("hashrate5s",snap.get("hashrate"))
         try: hr=float(hr) if hr is not None else None
         except Exception: hr=None
         expected=float(m.get("expected_ths",0) or 0)
-        if hr is not None and expected>0 and hr < expected*MIN_RATIO and snap.get("running") is not False:
+
+        # Zero/near-zero hashrate means it is effectively not mining even when
+        # no nominal expected_ths has been configured yet.
+        if hr is not None and hr <= 0.01:
+            return True,f"hashrate zerado ({hr:.2f})"
+        if hr is not None and expected>0 and hr < expected*MIN_RATIO:
             return True,f"hashrate baixo {hr:.2f} < {expected*MIN_RATIO:.2f}"
 
     web_ok=tcp(ip,int(m.get("port",80)),2)
@@ -527,6 +547,8 @@ def unhealthy(m):
 
     hr=detect_hashrate(m)
     expected=float(m.get("expected_ths",0) or 0)
+    if hr is not None and hr <= 0.01:
+        return True,f"hashrate zerado ({hr:.2f})"
     if hr is not None and expected>0 and hr < expected*MIN_RATIO:
         return True,f"hashrate baixo {hr:.2f} < {expected*MIN_RATIO:.2f}"
     return False,"ok"
@@ -629,6 +651,8 @@ cat > "$ROOT/etc/nexhash/miners.json" <<'EOF'
       "name": "ASIC 1",
       "ip": "192.168.1.100",
       "enabled": false,
+      "auto_recovery": true,
+      "maintenance_mode": false,
       "firmware": "braiins",
       "password_file": "/etc/nexhash/miner-secrets/miner-1.password",
       "cooldown_fan_pwm": 100,
