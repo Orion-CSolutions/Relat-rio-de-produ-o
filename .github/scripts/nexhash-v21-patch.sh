@@ -516,6 +516,33 @@ fi
 sudo rm -rf rootfs/tmp/nexhash-app-unpack
 sudo chown -R root:root rootfs/opt/nexhash/current
 
+# EdgeOS private service API: keep browser/user authentication intact while
+# allowing the local root watchdog to reuse NexHash's saved ASIC credentials.
+sudo python3 - rootfs/opt/nexhash/current/server.js <<'PY_EDGEOS_SERVER'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1])
+s=p.read_text(encoding="utf-8")
+needle="app.use('/api', (req, res, next) => {"
+if needle not in s:
+    raise SystemExit("NexHash API middleware marker not found")
+block=r'''
+// NEXHASH_EDGEOS_INTERNAL_WATCHDOG
+// Registered before user-session middleware. Still protected by BRIDGE_TOKEN.
+app.get('/api/internal/watchdog/miners', auth, (req,res)=>res.json(snap()));
+app.post('/api/internal/watchdog/miners/:id/action', auth, async(req,res)=>{
+  const miner=byId(req.params.id);
+  if(!miner)return res.status(404).json({error:'not_found'});
+  const action=String(req.body?.action||'');
+  if(!['pause','restart','resume','reboot'].includes(action))return res.status(400).json({error:'unsupported_action'});
+  try{res.json(await performMinerAction(miner,action,req.body||{}))}catch(e){fail(res,e)}
+});
+'''
+s=s.replace(needle,block+"\n"+needle,1)
+p.write_text(s,encoding="utf-8")
+PY_EDGEOS_SERVER
+sudo grep -q 'NEXHASH_EDGEOS_INTERNAL_WATCHDOG' rootfs/opt/nexhash/current/server.js
+
 # Prepare the LOCAL EdgeOS runtime at build time so first boot does not spend
 # minutes on npm install and works even before external package mirrors respond.
 if sudo test -f rootfs/opt/nexhash/current/package.json; then
@@ -597,6 +624,8 @@ grep -q 'opt/nexhash/current/server.js' verify/squashfs-list.txt
 grep -q 'opt/nexhash/current/public/app.js' verify/squashfs-list.txt
 grep -q 'opt/nexhash/current/node_modules/express' verify/squashfs-list.txt
 unsquashfs -cat verify/filesystem.squashfs opt/nexhash/current/package.json | grep -q '5.2.2-commercial-v1.5'
+unsquashfs -cat verify/filesystem.squashfs opt/nexhash/current/server.js | grep -q 'NEXHASH_EDGEOS_INTERNAL_WATCHDOG'
+unsquashfs -cat verify/filesystem.squashfs opt/nexhash/current/server.js | grep -q '/api/internal/watchdog/miners'
 unsquashfs -cat verify/filesystem.squashfs opt/nexhash/current/.env | grep -q '^PORT=8787'
 unsquashfs -cat verify/filesystem.squashfs usr/local/bin/braiins-toolbox > verify/braiins-toolbox
 test -s verify/braiins-toolbox
@@ -650,6 +679,7 @@ test "$(stat -c%s "$DEST")" -gt 3000000000
   echo "NexHash server/watchdog live status in welcome center: OK"
   echo "NexHash Commercial V1.5 payload embedded: OK"
   echo "NexHash local server.js + node_modules preinstalled: OK"
+  echo "NexHash protected internal watchdog API: OK"
   echo "NexHash local port 8787 environment: OK"
   echo "NexHash server systemd service/restart policy: OK"
   echo "NexHash Opera autostart to local server: OK"
