@@ -81,26 +81,23 @@ EOF_DNS
 cat > /usr/local/sbin/nexhash-network-repair <<'EOF_REPAIR'
 #!/usr/bin/env bash
 set -u
-mkdir -p /run/NetworkManager
 nmcli networking on >/dev/null 2>&1 || true
 nmcli radio wifi on >/dev/null 2>&1 || true
 
-# NetworkManager must control resolver state. A static resolver from the
-# build environment can show "Connected" while all Internet access fails.
+# NetworkManager owns resolver state. Start with a normal writable file,
+# never the GitHub Actions resolver or a dead symlink.
 rm -f /etc/resolv.conf
-if [ -e /run/NetworkManager/resolv.conf ]; then
-  ln -s /run/NetworkManager/resolv.conf /etc/resolv.conf
-else
+install -m 0644 /dev/null /etc/resolv.conf
+printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
+
+systemctl restart NetworkManager >/dev/null 2>&1 || true
+sleep 3
+nmcli connection reload >/dev/null 2>&1 || true
+
+# NetworkManager normally replaces the fallback with DHCP DNS. Keep public
+# fallback only if no resolver arrived.
+if ! grep -q '^nameserver ' /etc/resolv.conf 2>/dev/null; then
   printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
-fi
-
-systemctl reload NetworkManager >/dev/null 2>&1 || systemctl restart NetworkManager >/dev/null 2>&1 || true
-sleep 2
-
-# If NM has created its resolver file after restart, prefer it over fallback DNS.
-if [ -e /run/NetworkManager/resolv.conf ]; then
-  rm -f /etc/resolv.conf
-  ln -s /run/NetworkManager/resolv.conf /etc/resolv.conf
 fi
 EOF_REPAIR
 chmod +x /usr/local/sbin/nexhash-network-repair
@@ -120,6 +117,20 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 EOF_SERVICE
 systemctl enable nexhash-network-repair.service || true
+
+# Appliance live user must not get stuck on an unusable sudo password.
+# Limit passwordless elevation to the fixed NexHash appliance account.
+install -d -m 0755 /etc/sudoers.d
+cat > /etc/sudoers.d/90-nexhash-edgeos <<'EOF_SUDO'
+nexhash ALL=(ALL:ALL) NOPASSWD: ALL
+EOF_SUDO
+chmod 0440 /etc/sudoers.d/90-nexhash-edgeos
+visudo -cf /etc/sudoers.d/90-nexhash-edgeos
+
+# If the live user already exists in the image, ensure it belongs to sudo.
+if id nexhash >/dev/null 2>&1; then
+  usermod -aG sudo nexhash || true
+fi
 
 mkdir -p /etc/skel/Desktop /etc/skel/.config/autostart /usr/local/bin /usr/share/nexhash-edgeos /usr/share/icons/hicolor/scalable/apps /usr/share/applications
 
@@ -241,9 +252,13 @@ class Welcome(QtWidgets.QMainWindow):
         conn=run("nmcli -t -f STATE general")
         ssid=run("nmcli -t -f active,ssid dev wifi | sed -n 's/^yes://p' | head -n1")
         ip=run("hostname -I | awk '{print $1}'")
-        if conn=="connected":
-            self.net.status.setText("● Conectado")
+        internet = bool(run("ping -c1 -W1 1.1.1.1 >/dev/null 2>&1 && getent hosts google.com >/dev/null 2>&1 && echo ok"))
+        if conn=="connected" and internet:
+            self.net.status.setText("● Internet OK")
             self.net.detail.setText((ssid or "Ethernet") + (f"  •  {ip}" if ip else ""))
+        elif conn=="connected":
+            self.net.status.setText("● Wi-Fi conectado • sem Internet")
+            self.net.detail.setText((ssid or "Rede local") + (f"  •  {ip}" if ip else "") + "  •  Reparação automática ativa")
         else:
             self.net.status.setText("○ Sem conexão"); self.net.detail.setText("Clique em Connect para escolher uma rede.")
 
@@ -318,11 +333,11 @@ chmod +x /usr/local/bin/nexhash-network-connect
 cat > /usr/local/bin/nexhash-tailscale <<'EOF_TSAPP'
 #!/usr/bin/env bash
 set -u
-sudo systemctl start tailscaled 2>/dev/null || true
+sudo -n systemctl start tailscaled 2>/dev/null || systemctl start tailscaled 2>/dev/null || true
 if tailscale status >/dev/null 2>&1; then
   konsole -e bash -lc 'echo "Tailscale conectado"; echo; tailscale status; echo; read -rp "Pressione ENTER para fechar..."'
 else
-  konsole -e bash -lc 'echo "NexHash EdgeOS - Conectar Tailscale"; echo; sudo tailscale up; echo; tailscale status; exec bash'
+  konsole -e bash -lc 'echo "NexHash EdgeOS - Conectar Tailscale"; echo; sudo -n tailscale up; echo; tailscale status; exec bash'
 fi
 EOF_TSAPP
 chmod +x /usr/local/bin/nexhash-tailscale
@@ -349,14 +364,9 @@ for KWRITE in kwriteconfig6 kwriteconfig5; do
   fi
 done
 
-# Make battery percentage visible in the panel.
-sleep 4
-JS='var ps=panels(); if(ps.length>0){var p=ps[0],ws=p.widgets(),b=null; for(var i=0;i<ws.length;i++){if(ws[i].type=="org.kde.plasma.battery"){b=ws[i];break;}} if(!b){b=p.addWidget("org.kde.plasma.battery");} if(b){b.currentConfigGroup=["General"];b.writeConfig("showPercentage",true);b.writeConfig("showRemainingTime",true);}}'
-if command -v qdbus6 >/dev/null 2>&1; then
-  qdbus6 org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "$JS" >/dev/null 2>&1 || true
-elif command -v qdbus >/dev/null 2>&1; then
-  qdbus org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "$JS" >/dev/null 2>&1 || true
-fi
+# Keep a single battery indicator. The system tray owns the panel battery;
+# exact percentage is always visible in NexHash Welcome.
+sleep 2
 EOF_SETUP
 chmod +x /usr/local/bin/nexhash-desktop-setup
 
@@ -404,6 +414,20 @@ EOF_DESKTOP_TS
 
 chmod +x /etc/skel/Desktop/*.desktop
 
+# Remove the duplicate standalone battery plasmoid inherited from the base image.
+# Battery remains available once through the system tray; NexHash Welcome shows exact %.
+PANEL=/etc/skel/.config/plasma-org.kde.plasma.desktop-appletsrc
+if [ -f "$PANEL" ]; then
+  sed -i 's/AppletOrder=3;4;5;6;7;8;9;10/AppletOrder=3;4;5;6;8;9;10/g' "$PANEL" || true
+  python3 - "$PANEL" <<'PY_PANEL'
+import re,sys
+p=sys.argv[1]
+s=open(p,encoding="utf-8").read()
+s=re.sub(r'\n\[Containments\]\[2\]\[Applets\]\[7\][\s\S]*?(?=\n\[Containments\]\[2\]\[Applets\]\[8\])','\n',s)
+open(p,'w',encoding="utf-8").write(s)
+PY_PANEL
+fi
+
 mkdir -p /etc/skel/.config
 cat > /etc/skel/.config/kdeglobals <<'EOF_KDE'
 [General]
@@ -414,6 +438,9 @@ SingleClick=false
 EOF_KDE
 
 # Keep installer autostart and existing NexHash app intact.
+if [ -x /usr/local/bin/nexhash-installer-autostart ]; then
+  sed -i 's#pkexec calamares#sudo -n calamares#g' /usr/local/bin/nexhash-installer-autostart || true
+fi
 test -x /usr/local/bin/nexhash-installer-autostart
 grep -q 'nexhash-installer=1' /usr/local/bin/nexhash-installer-autostart
 command -v opera >/dev/null
@@ -430,7 +457,8 @@ trap - EXIT
 
 # Never ship the GitHub runner resolver inside the ISO.
 sudo rm -f rootfs/etc/resolv.conf
-sudo ln -s /run/NetworkManager/resolv.conf rootfs/etc/resolv.conf
+printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee rootfs/etc/resolv.conf >/dev/null
+sudo chmod 0644 rootfs/etc/resolv.conf
 
 echo "[4/7] Repacking live filesystem..."
 sudo mksquashfs rootfs work/filesystem-new.squashfs -comp xz -b 1M -noappend >/dev/null
@@ -446,7 +474,7 @@ grep -q "Install NexHash EdgeOS" work/grub.cfg
 grep -q "nexhash-installer=1" work/grub.cfg
 
 echo "[6/7] Building ISO..."
-DEST="$OUT_DIR/NexHash-EdgeOS-2.3-NETFIX-FINAL-Install-amd64.iso"
+DEST="$OUT_DIR/NexHash-EdgeOS-2.4-STABLE-FINAL-Install-amd64.iso"
 xorriso   -indev "$SRC"   -outdev "$DEST"   -boot_image any replay   -map work/filesystem-new.squashfs /live/filesystem.squashfs   -commit >/dev/null
 
 test -s "$DEST"
@@ -468,7 +496,7 @@ unsquashfs -cat verify/filesystem.squashfs usr/share/backgrounds/nexhash/edgeos-
 test -s verify/wallpaper.png
 unsquashfs -cat verify/filesystem.squashfs etc/NetworkManager/conf.d/10-nexhash.conf | grep -q 'managed=true'
 unsquashfs -cat verify/filesystem.squashfs etc/NetworkManager/conf.d/20-nexhash-dns.conf | grep -q 'dns=default'
-unsquashfs -cat verify/filesystem.squashfs usr/local/sbin/nexhash-network-repair | grep -q '/run/NetworkManager/resolv.conf'
+unsquashfs -cat verify/filesystem.squashfs usr/local/sbin/nexhash-network-repair | grep -q 'nameserver 1.1.1.1'
 unsquashfs -cat verify/filesystem.squashfs etc/systemd/system/nexhash-network-repair.service | grep -q 'nexhash-network-repair'
 unsquashfs -cat verify/filesystem.squashfs etc/skel/Desktop/Connect.desktop | grep -q 'nexhash-network-connect'
 unsquashfs -cat verify/filesystem.squashfs etc/skel/Desktop/Opera.desktop | grep -q 'Exec=opera'
@@ -477,6 +505,13 @@ unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-desktop-setup |
 unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-welcome | grep -q 'NexHash <span'
 unsquashfs -cat verify/filesystem.squashfs etc/skel/.config/autostart/nexhash-welcome.desktop | grep -q 'nexhash-welcome'
 unsquashfs -cat verify/filesystem.squashfs usr/share/applications/nexhash-welcome.desktop | grep -q 'Central de controle'
+unsquashfs -cat verify/filesystem.squashfs etc/sudoers.d/90-nexhash-edgeos | grep -q 'NOPASSWD: ALL'
+unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-welcome | grep -q 'sem Internet'
+# The default panel must not ship a second standalone battery plasmoid.
+if unsquashfs -cat verify/filesystem.squashfs etc/skel/.config/plasma-org.kde.plasma.desktop-appletsrc 2>/dev/null | grep -q 'plugin=org.kde.plasma.battery'; then
+  echo "Duplicate standalone battery plasmoid still present" >&2
+  exit 1
+fi
 unsquashfs -cat verify/filesystem.squashfs var/lib/dpkg/status > verify/status
 grep -q '^Package: network-manager$' verify/status
 grep -q '^Package: plasma-nm$' verify/status
@@ -488,7 +523,7 @@ grep -q '^Package: python3-pyqt5$' verify/status
 test "$(stat -c%s "$DEST")" -gt 3000000000
 
 {
-  echo "NEXHASH EDGEOS 2.3 NETFIX FINAL ISO VALIDATED"
+  echo "NEXHASH EDGEOS 2.4 STABLE FINAL ISO VALIDATED"
   echo "BIOS installer menu: OK"
   echo "UEFI installer menu: OK"
   echo "nexhash-installer=1: OK"
@@ -498,7 +533,10 @@ test "$(stat -c%s "$DEST")" -gt 3000000000
   echo "Boot-time network self-repair: OK"
   echo "Plasma network Connect UI: OK"
   echo "Wi-Fi radio setup: OK"
-  echo "Battery percentage visualization: OK"
+  echo "Single battery indicator policy: OK"
+  echo "Battery percentage in NexHash Welcome: OK"
+  echo "NexHash live sudo without broken password prompt: OK"
+  echo "Internet reachability status in Welcome: OK"
   echo "NexHash product welcome center: OK"
   echo "NexHash branding/icon/theme: OK"
   echo "Opera: OK"
