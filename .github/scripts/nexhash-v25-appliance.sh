@@ -36,11 +36,11 @@ if [ ! -f .env ] && [ -f .env.example ]; then
   cp .env.example .env
 fi
 
-# Generate a private bridge token on the machine itself, never in public CI.
+# V1.5 frontend defaults to this local token. Keep first boot aligned so the
+# dashboard works immediately. Tailscale provides the private network boundary.
 if [ -f .env ]; then
-  if grep -Eq '^BRIDGE_TOKEN=(troque-|miner-control-local|$)' .env 2>/dev/null; then
-    TOKEN="$(openssl rand -hex 32 2>/dev/null || python3 -c 'import secrets;print(secrets.token_hex(32))')"
-    sed -i "s#^BRIDGE_TOKEN=.*#BRIDGE_TOKEN=$TOKEN#" .env
+  if grep -Eq '^BRIDGE_TOKEN=(troque-|$)' .env 2>/dev/null; then
+    sed -i 's#^BRIDGE_TOKEN=.*#BRIDGE_TOKEN=miner-control-local#' .env
   fi
 fi
 
@@ -122,7 +122,7 @@ fi
 
 # If the machine was authenticated before, tailscaled's persistent state reconnects automatically.
 # Otherwise start login non-interactively and expose only the short-lived approval URL locally.
-OUT="$(tailscale up --hostname=nexhash-edge --accept-dns=true 2>&1 || true)"
+OUT="$(timeout 18s tailscale up --hostname=nexhash-edge --accept-dns=true 2>&1 || true)"
 URL="$(printf '%s\n' "$OUT" | grep -Eo 'https://login\.tailscale\.com/[^ ]+' | head -n1 || true)"
 if [ -n "$URL" ]; then
   install -d -m 0755 /run/nexhash
