@@ -28,6 +28,30 @@ export PORT="${NEXHASH_PORT:-8787}"
 export HOST="${NEXHASH_BIND:-0.0.0.0}"
 
 if [ -x ./run.sh ]; then exec ./run.sh; fi
+
+# NexHash Commercial V1.5 Production Cloud: prefer the full Docker Compose stack.
+COMPOSE_DIR=""
+for d in . ./deploy; do
+  if [ -f "$d/docker-compose.yml" ] || [ -f "$d/docker-compose.yaml" ] || [ -f "$d/compose.yml" ] || [ -f "$d/compose.yaml" ]; then
+    COMPOSE_DIR="$d"
+    break
+  fi
+done
+if [ -n "$COMPOSE_DIR" ]; then
+  cd "$COMPOSE_DIR"
+  if [ ! -f .env ] && [ -f .env.example ]; then
+    cp .env.example .env
+  fi
+  if [ -x ./generate-secrets.sh ]; then
+    ./generate-secrets.sh --non-interactive >/var/log/nexhash/generate-secrets.log 2>&1 || ./generate-secrets.sh >/var/log/nexhash/generate-secrets.log 2>&1 || true
+  fi
+  if docker compose version >/dev/null 2>&1; then
+    exec docker compose --env-file .env up --build --remove-orphans
+  elif command -v docker-compose >/dev/null 2>&1; then
+    exec docker-compose --env-file .env up --build --remove-orphans
+  fi
+fi
+
 if [ -f package.json ]; then
   if [ -f package-lock.json ]; then npm ci --omit=dev || npm install; else npm install; fi
   if node -e 'let p=require("./package.json");process.exit(p.scripts&&p.scripts.start?0:1)'; then
@@ -105,8 +129,8 @@ chmod +x "$ROOT/usr/local/bin/nexhash-tailscale-autoconnect"
 cat > "$ROOT/etc/systemd/system/nexhash-tailscale-autoconnect.service" <<'EOF'
 [Unit]
 Description=NexHash Tailscale Auto-Reconnect
-After=network-online.target tailscaled.service
-Wants=network-online.target tailscaled.service
+After=network-online.target tailscaled.service docker.service
+Wants=network-online.target docker.service tailscaled.service
 
 [Service]
 Type=oneshot
