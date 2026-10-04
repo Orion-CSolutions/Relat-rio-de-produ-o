@@ -1,4 +1,4 @@
-name: NexHash EdgeOS 2.5 Appliance Private Build R2
+name: NexHash EdgeOS 2.5 Appliance Private Build R3
 
 on:
   push:
