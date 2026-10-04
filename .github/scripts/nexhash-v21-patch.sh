@@ -70,6 +70,57 @@ managed=true
 wifi.scan-rand-mac-address=no
 EOF_NM
 
+cat > /etc/NetworkManager/conf.d/20-nexhash-dns.conf <<'EOF_DNS'
+[main]
+dns=default
+rc-manager=file
+EOF_DNS
+
+# Self-healing network repair helper. It makes sure NetworkManager owns
+# /etc/resolv.conf and refreshes DHCP/DNS after boot.
+cat > /usr/local/sbin/nexhash-network-repair <<'EOF_REPAIR'
+#!/usr/bin/env bash
+set -u
+mkdir -p /run/NetworkManager
+nmcli networking on >/dev/null 2>&1 || true
+nmcli radio wifi on >/dev/null 2>&1 || true
+
+# NetworkManager must control resolver state. A static resolver from the
+# build environment can show "Connected" while all Internet access fails.
+rm -f /etc/resolv.conf
+if [ -e /run/NetworkManager/resolv.conf ]; then
+  ln -s /run/NetworkManager/resolv.conf /etc/resolv.conf
+else
+  printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
+fi
+
+systemctl reload NetworkManager >/dev/null 2>&1 || systemctl restart NetworkManager >/dev/null 2>&1 || true
+sleep 2
+
+# If NM has created its resolver file after restart, prefer it over fallback DNS.
+if [ -e /run/NetworkManager/resolv.conf ]; then
+  rm -f /etc/resolv.conf
+  ln -s /run/NetworkManager/resolv.conf /etc/resolv.conf
+fi
+EOF_REPAIR
+chmod +x /usr/local/sbin/nexhash-network-repair
+
+cat > /etc/systemd/system/nexhash-network-repair.service <<'EOF_SERVICE'
+[Unit]
+Description=NexHash EdgeOS network and DNS repair
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/nexhash-network-repair
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF_SERVICE
+systemctl enable nexhash-network-repair.service || true
+
 mkdir -p /etc/skel/Desktop /etc/skel/.config/autostart /usr/local/bin /usr/share/nexhash-edgeos /usr/share/icons/hicolor/scalable/apps /usr/share/applications
 
 # Product branding.
@@ -377,6 +428,10 @@ sudo rm -f rootfs/tmp/nexhash-v21-rootfs.sh
 cleanup
 trap - EXIT
 
+# Never ship the GitHub runner resolver inside the ISO.
+sudo rm -f rootfs/etc/resolv.conf
+sudo ln -s /run/NetworkManager/resolv.conf rootfs/etc/resolv.conf
+
 echo "[4/7] Repacking live filesystem..."
 sudo mksquashfs rootfs work/filesystem-new.squashfs -comp xz -b 1M -noappend >/dev/null
 
@@ -391,7 +446,7 @@ grep -q "Install NexHash EdgeOS" work/grub.cfg
 grep -q "nexhash-installer=1" work/grub.cfg
 
 echo "[6/7] Building ISO..."
-DEST="$OUT_DIR/NexHash-EdgeOS-2.2-PRODUCT-FINAL-Install-amd64.iso"
+DEST="$OUT_DIR/NexHash-EdgeOS-2.3-NETFIX-FINAL-Install-amd64.iso"
 xorriso   -indev "$SRC"   -outdev "$DEST"   -boot_image any replay   -map work/filesystem-new.squashfs /live/filesystem.squashfs   -commit >/dev/null
 
 test -s "$DEST"
@@ -412,6 +467,9 @@ grep -q "nexhash-installer=1" verify/grub.cfg
 unsquashfs -cat verify/filesystem.squashfs usr/share/backgrounds/nexhash/edgeos-wallpaper.png > verify/wallpaper.png
 test -s verify/wallpaper.png
 unsquashfs -cat verify/filesystem.squashfs etc/NetworkManager/conf.d/10-nexhash.conf | grep -q 'managed=true'
+unsquashfs -cat verify/filesystem.squashfs etc/NetworkManager/conf.d/20-nexhash-dns.conf | grep -q 'dns=default'
+unsquashfs -cat verify/filesystem.squashfs usr/local/sbin/nexhash-network-repair | grep -q '/run/NetworkManager/resolv.conf'
+unsquashfs -cat verify/filesystem.squashfs etc/systemd/system/nexhash-network-repair.service | grep -q 'nexhash-network-repair'
 unsquashfs -cat verify/filesystem.squashfs etc/skel/Desktop/Connect.desktop | grep -q 'nexhash-network-connect'
 unsquashfs -cat verify/filesystem.squashfs etc/skel/Desktop/Opera.desktop | grep -q 'Exec=opera'
 unsquashfs -cat verify/filesystem.squashfs etc/skel/Desktop/Tailscale.desktop | grep -q 'nexhash-tailscale'
@@ -430,12 +488,14 @@ grep -q '^Package: python3-pyqt5$' verify/status
 test "$(stat -c%s "$DEST")" -gt 3000000000
 
 {
-  echo "NEXHASH EDGEOS 2.2 PRODUCT FINAL ISO VALIDATED"
+  echo "NEXHASH EDGEOS 2.3 NETFIX FINAL ISO VALIDATED"
   echo "BIOS installer menu: OK"
   echo "UEFI installer menu: OK"
   echo "nexhash-installer=1: OK"
   echo "Calamares installer/autostart: OK"
   echo "NetworkManager backend: OK"
+  echo "NetworkManager DNS/resolver ownership: OK"
+  echo "Boot-time network self-repair: OK"
   echo "Plasma network Connect UI: OK"
   echo "Wi-Fi radio setup: OK"
   echo "Battery percentage visualization: OK"
