@@ -39,7 +39,7 @@ jobs:
           cat > release/JUNTAR-ISO-WINDOWS.bat <<'BAT'
           @echo off
           echo Montando NexHash EdgeOS 2.5...
-          copy /b NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-00+NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-01+NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-02 NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso
+          copy /b NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-00+NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-01 NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso
           echo.
           echo Pronto. ISO criada:
           echo NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso
@@ -48,7 +48,7 @@ jobs:
           cat > release/LEIA-ME.txt <<'TXT'
           NexHash EdgeOS 2.5 APPLIANCE FINAL
 
-          1. Baixe os 3 arquivos .part-00, .part-01 e .part-02.
+          1. Baixe os 2 arquivos .part-00 e .part-01.
           2. Baixe JUNTAR-ISO-WINDOWS.bat para a mesma pasta.
           3. Execute JUNTAR-ISO-WINDOWS.bat.
           4. Grave a ISO resultante no Rufus.
@@ -65,4 +65,4 @@ jobs:
         run: |
           set -euo pipefail
           gh release delete v2.5-appliance-final --cleanup-tag -y 2>/dev/null || true
-          gh release create v2.5-appliance-final             --title "NexHash EdgeOS 2.5 APPLIANCE FINAL"             --notes "Validated appliance build. Download all three ISO parts plus JUNTAR-ISO-WINDOWS.bat, place them in the same folder, and run the BAT to reconstruct the ISO. Final ISO SHA-256: be73c9f132e7199344457cd4219f184fa933bab7e59c98b6bddbdd93bbde0e62"             release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-00             release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-01             release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-02             release/JUNTAR-ISO-WINDOWS.bat             release/LEIA-ME.txt             release/parts.sha256
+          gh release create v2.5-appliance-final             --title "NexHash EdgeOS 2.5 APPLIANCE FINAL"             --notes "Validated appliance build. Download both ISO parts plus JUNTAR-ISO-WINDOWS.bat, place them in the same folder, and run the BAT to reconstruct the ISO. Final ISO SHA-256: be73c9f132e7199344457cd4219f184fa933bab7e59c98b6bddbdd93bbde0e62"             release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-00             release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-01             release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-02             release/JUNTAR-ISO-WINDOWS.bat             release/LEIA-ME.txt             release/parts.sha256
