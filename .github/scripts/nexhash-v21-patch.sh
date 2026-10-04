@@ -50,7 +50,7 @@ fi
 
 # Ensure the KDE/NetworkManager connection UI exists.
 apt-get update
-apt-get install -y network-manager plasma-nm plasma-pa powerdevil wpasupplicant rfkill python3-pyqt5 fonts-noto-core
+apt-get install -y network-manager plasma-nm plasma-pa powerdevil wpasupplicant rfkill python3-pyqt5 fonts-noto-core python3-requests jq
 apt-get install -y docker.io docker-compose || apt-get install -y docker.io docker-compose-plugin || true
 systemctl enable docker.service 2>/dev/null || true
 apt-get install -y network-manager-gnome wireless-tools || true
@@ -134,6 +134,306 @@ visudo -cf /etc/sudoers.d/90-nexhash-edgeos
 if id nexhash >/dev/null 2>&1; then
   usermod -aG sudo nexhash || true
 fi
+
+mkdir -p /opt/nexhash/current /etc/nexhash /var/lib/nexhash /var/log/nexhash
+
+# NexHash application launcher. It supports the production bundle layouts we've used:
+# explicit start.sh, Python app/server, or Node package.json.
+cat > /usr/local/bin/nexhash-server <<'EOF_NHSERVER'
+#!/usr/bin/env bash
+set -euo pipefail
+APP=/opt/nexhash/current
+cd "$APP"
+
+export HOST=0.0.0.0
+export PORT=8787
+export NODE_ENV=production
+export PYTHONUNBUFFERED=1
+
+if [ -x "$APP/start.sh" ]; then
+  exec "$APP/start.sh"
+elif [ -f "$APP/server.py" ]; then
+  exec python3 "$APP/server.py"
+elif [ -f "$APP/app.py" ]; then
+  exec python3 "$APP/app.py"
+elif [ -f "$APP/package.json" ]; then
+  if [ -f "$APP/node_modules/.bin/next" ]; then
+    exec npm start -- --hostname 0.0.0.0 --port 8787
+  else
+    npm install --omit=dev
+    exec npm start -- --hostname 0.0.0.0 --port 8787
+  fi
+else
+  echo "NexHash application bundle not found in $APP" >&2
+  exit 78
+fi
+EOF_NHSERVER
+chmod +x /usr/local/bin/nexhash-server
+
+cat > /etc/systemd/system/nexhash.service <<'EOF_NHSVC'
+[Unit]
+Description=NexHash Production Server
+After=network-online.target tailscaled.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/nexhash/current
+ExecStart=/usr/local/bin/nexhash-server
+Restart=always
+RestartSec=5
+TimeoutStartSec=90
+TimeoutStopSec=20
+KillSignal=SIGTERM
+Environment=PORT=8787
+Environment=HOST=0.0.0.0
+Nice=-5
+OOMScoreAdjust=-500
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target
+EOF_NHSVC
+systemctl enable nexhash.service || true
+
+# Default ASIC recovery policy: conservative by design.
+cat > /etc/nexhash/recovery.json <<'EOF_RECOVERY_CFG'
+{
+  "enabled": true,
+  "poll_seconds": 30,
+  "failure_confirmations": 3,
+  "minimum_hashrate_ratio": 0.20,
+  "cooldown_seconds": 180,
+  "cooldown_target_c": 65,
+  "cooldown_max_seconds": 600,
+  "post_reboot_grace_seconds": 300,
+  "max_attempts_per_hour": 3,
+  "lockout_seconds": 1800,
+  "api_base": "http://127.0.0.1:8787",
+  "miners_endpoints": ["/api/miners", "/api/machines"],
+  "reboot_endpoint_templates": [
+    "/api/miners/{id}/reboot",
+    "/api/machines/{id}/reboot",
+    "/api/miners/{id}/commands/reboot",
+    "/api/machines/{id}/commands/reboot"
+  ]
+}
+EOF_RECOVERY_CFG
+
+cat > /usr/local/bin/nexhash-asic-recovery <<'PY_RECOVERY'
+#!/usr/bin/env python3
+import json, os, time, urllib.request, urllib.error, datetime
+
+CFG="/etc/nexhash/recovery.json"
+STATE="/var/lib/nexhash/asic-recovery-state.json"
+LOG="/var/log/nexhash/asic-recovery.log"
+
+def log(msg):
+    os.makedirs(os.path.dirname(LOG), exist_ok=True)
+    stamp=datetime.datetime.now().isoformat(timespec="seconds")
+    with open(LOG,"a",encoding="utf-8") as f: f.write(f"{stamp} {msg}\n")
+
+def load_json(path, default):
+    try:
+        with open(path,encoding="utf-8") as f: return json.load(f)
+    except Exception: return default
+
+def save_json(path, data):
+    tmp=path+".tmp"
+    with open(tmp,"w",encoding="utf-8") as f: json.dump(data,f,ensure_ascii=False,indent=2)
+    os.replace(tmp,path)
+
+def http_json(url, method="GET", timeout=5):
+    req=urllib.request.Request(url,method=method,headers={"Accept":"application/json","Content-Type":"application/json"})
+    try:
+        with urllib.request.urlopen(req,timeout=timeout) as r:
+            raw=r.read()
+            if not raw: return True
+            try: return json.loads(raw.decode("utf-8","replace"))
+            except Exception: return True
+    except Exception:
+        return None
+
+def miners_from_api(cfg):
+    base=cfg["api_base"].rstrip("/")
+    for ep in cfg.get("miners_endpoints",[]):
+        data=http_json(base+ep)
+        if isinstance(data,dict):
+            for k in ("miners","machines","items","data"):
+                if isinstance(data.get(k),list): return data[k]
+        if isinstance(data,list): return data
+    return []
+
+def mid(m):
+    return str(m.get("id") or m.get("uuid") or m.get("ip") or m.get("name") or "unknown")
+
+def number(m,*keys):
+    for k in keys:
+        try:
+            v=m.get(k)
+            if isinstance(v,dict):
+                for kk in ("value","current","avg"): 
+                    if kk in v: return float(v[kk])
+            if v is not None: return float(v)
+        except Exception: pass
+    return None
+
+def is_down(m,cfg):
+    status=str(m.get("status") or m.get("state") or "").lower()
+    if status in ("offline","down","stopped","error","dead","unreachable"): return True
+    hr=number(m,"hashrate","hashrate_current","hashrate5m","hashrate_5m")
+    target=number(m,"target_hashrate","nominal_hashrate","expected_hashrate")
+    if hr is not None and target and target>0:
+        return hr < target*float(cfg.get("minimum_hashrate_ratio",0.2))
+    return False
+
+def temp_c(m):
+    vals=[]
+    for k in ("temperature","temp","chip_temp","max_temp","temperature_max"):
+        v=number(m,k)
+        if v is not None: vals.append(v)
+    for k in ("boards","hashboards"):
+        arr=m.get(k)
+        if isinstance(arr,list):
+            for b in arr:
+                if isinstance(b,dict):
+                    for tk in ("temp","temperature","chip_temp"):
+                        v=number(b,tk)
+                        if v is not None: vals.append(v)
+    return max(vals) if vals else None
+
+def reboot(cfg, miner_id):
+    base=cfg["api_base"].rstrip("/")
+    for tpl in cfg.get("reboot_endpoint_templates",[]):
+        u=base+tpl.replace("{id}",str(miner_id))
+        if http_json(u,"POST") is not None:
+            log(f"{miner_id}: comando de reboot aceito em {u}")
+            return True
+    log(f"{miner_id}: nenhum endpoint de reboot respondeu")
+    return False
+
+def now(): return int(time.time())
+
+cfg=load_json(CFG,{})
+if not cfg.get("enabled",True):
+    raise SystemExit(0)
+
+os.makedirs("/var/lib/nexhash",exist_ok=True)
+state=load_json(STATE,{})
+poll=int(cfg.get("poll_seconds",30))
+confirm=int(cfg.get("failure_confirmations",3))
+cool=int(cfg.get("cooldown_seconds",180))
+coolmax=int(cfg.get("cooldown_max_seconds",600))
+target_temp=float(cfg.get("cooldown_target_c",65))
+grace=int(cfg.get("post_reboot_grace_seconds",300))
+limit=int(cfg.get("max_attempts_per_hour",3))
+lockout=int(cfg.get("lockout_seconds",1800))
+
+log("watchdog ASIC iniciado")
+
+while True:
+    miners=miners_from_api(cfg)
+    ts=now()
+    for m in miners:
+        i=mid(m)
+        s=state.setdefault(i,{"fails":0,"attempts":[],"lockout_until":0,"grace_until":0})
+        s["attempts"]=[x for x in s.get("attempts",[]) if ts-x < 3600]
+
+        if ts < s.get("lockout_until",0) or ts < s.get("grace_until",0):
+            continue
+
+        if not is_down(m,cfg):
+            if s.get("fails",0): log(f"{i}: voltou ao normal")
+            s["fails"]=0
+            continue
+
+        s["fails"]=int(s.get("fails",0))+1
+        log(f"{i}: falha confirmada {s['fails']}/{confirm}")
+        if s["fails"] < confirm:
+            continue
+
+        if len(s["attempts"]) >= limit:
+            s["lockout_until"]=ts+lockout
+            s["fails"]=0
+            log(f"{i}: limite de {limit} tentativas/h atingido; intervenção necessária por {lockout}s")
+            continue
+
+        # Cooling phase: require both minimum elapsed time and acceptable temp,
+        # but never wait forever if telemetry is stale/unavailable.
+        start=now()
+        log(f"{i}: entrando em resfriamento por pelo menos {cool}s; alvo <= {target_temp:.0f}C")
+        while True:
+            elapsed=now()-start
+            fresh=None
+            for mm in miners_from_api(cfg):
+                if mid(mm)==i: fresh=mm; break
+            t=temp_c(fresh or m)
+            if elapsed>=cool and (t is None or t<=target_temp):
+                break
+            if elapsed>=coolmax:
+                log(f"{i}: cooldown máximo atingido; temperatura={t}")
+                break
+            remaining=max(0,cool-elapsed)
+            log(f"{i}: resfriando... {remaining}s mínimos restantes; temperatura={t}")
+            time.sleep(min(30,max(5,poll)))
+
+        if reboot(cfg,i):
+            s["attempts"].append(now())
+            s["grace_until"]=now()+grace
+            s["fails"]=0
+            log(f"{i}: reinício enviado; carência de {grace}s para retomada do hashrate")
+        else:
+            s["lockout_until"]=now()+300
+            s["fails"]=0
+
+    save_json(STATE,state)
+    time.sleep(poll)
+PY_RECOVERY
+chmod +x /usr/local/bin/nexhash-asic-recovery
+python3 -m py_compile /usr/local/bin/nexhash-asic-recovery
+
+cat > /etc/systemd/system/nexhash-asic-recovery.service <<'EOF_RECOVERY_SVC'
+[Unit]
+Description=NexHash ASIC Automatic Recovery
+After=nexhash.service network-online.target
+Wants=nexhash.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/nexhash-asic-recovery
+Restart=always
+RestartSec=10
+Nice=5
+
+[Install]
+WantedBy=multi-user.target
+EOF_RECOVERY_SVC
+systemctl enable nexhash-asic-recovery.service || true
+
+# Open NexHash automatically in Opera after desktop login, but don't block boot.
+cat > /usr/local/bin/nexhash-open-dashboard <<'EOF_OPEN'
+#!/usr/bin/env bash
+for i in $(seq 1 60); do
+  if curl -fsS --max-time 2 http://127.0.0.1:8787/ >/dev/null 2>&1; then
+    exec opera --start-maximized http://127.0.0.1:8787/
+  fi
+  sleep 2
+done
+exit 0
+EOF_OPEN
+chmod +x /usr/local/bin/nexhash-open-dashboard
+
+cat > /etc/skel/.config/autostart/nexhash-dashboard.desktop <<'EOF_OPEN_DESK'
+[Desktop Entry]
+Type=Application
+Name=NexHash Dashboard
+Exec=/usr/local/bin/nexhash-open-dashboard
+X-KDE-autostart-after=panel
+NoDisplay=true
+Terminal=false
+EOF_OPEN_DESK
 
 mkdir -p /etc/skel/Desktop /etc/skel/.config/autostart /usr/local/bin /usr/share/nexhash-edgeos /usr/share/icons/hicolor/scalable/apps /usr/share/applications
 
@@ -617,6 +917,12 @@ unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-desktop-setup |
 unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-welcome | grep -q 'NexHash <span'
 unsquashfs -cat verify/filesystem.squashfs etc/skel/.config/autostart/nexhash-welcome.desktop | grep -q 'nexhash-welcome'
 unsquashfs -cat verify/filesystem.squashfs usr/share/applications/nexhash-welcome.desktop | grep -q 'Central de controle'
+unsquashfs -cat verify/filesystem.squashfs etc/systemd/system/nexhash.service | grep -q 'Restart=always'
+unsquashfs -cat verify/filesystem.squashfs etc/systemd/system/nexhash-asic-recovery.service | grep -q 'Restart=always'
+unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-asic-recovery | grep -q 'cooldown_target_c'
+unsquashfs -cat verify/filesystem.squashfs usr/local/bin/nexhash-asic-recovery | grep -q 'max_attempts_per_hour'
+unsquashfs -cat verify/filesystem.squashfs etc/nexhash/recovery.json | grep -q '"cooldown_seconds": 180'
+unsquashfs -cat verify/filesystem.squashfs etc/skel/.config/autostart/nexhash-dashboard.desktop | grep -q 'nexhash-open-dashboard'
 # Real V1.5 app payload must be inside the final ISO, not just the appliance bootstrap.
 unsquashfs -ll verify/filesystem.squashfs > verify/squashfs-list.txt
 grep -Eq 'opt/nexhash/current/.+(docker-compose\.ya?ml|compose\.ya?ml|HOSPEDAR-NEXHASH-CLOUD\.md|README-RAPIDO\.txt)' verify/squashfs-list.txt
@@ -676,6 +982,11 @@ test "$(stat -c%s "$DEST")" -gt 3000000000
   echo "NexHash live/admin sudo without broken password prompt: OK"
   echo "Internet reachability status in Welcome: OK"
   echo "NexHash product welcome center: OK"
+  echo "NexHash autohost systemd service: OK"
+  echo "ASIC drop detection/recovery watchdog: OK"
+  echo "ASIC cooldown countdown + temperature gate: OK"
+  echo "ASIC reboot loop protection: OK"
+  echo "Opera auto-open NexHash dashboard: OK"
   echo "NexHash server/watchdog live status in welcome center: OK"
   echo "NexHash Commercial V1.5 payload embedded: OK"
   echo "NexHash local server.js + node_modules preinstalled: OK"
