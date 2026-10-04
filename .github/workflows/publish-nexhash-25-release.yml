@@ -1,0 +1,68 @@
+name: Publish NexHash EdgeOS 2.5 Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-nexhash-25-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download validated 2.5 split artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: NexHash-EdgeOS-2.5-APPLIANCE-FINAL-parts
+          path: source-parts
+          run-id: 37217172471
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Reassemble and make 3 release parts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cat source-parts/final-part-* > release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso
+          echo "be73c9f132e7199344457cd4219f184fa933bab7e59c98b6bddbdd93bbde0e62  release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso" | sha256sum -c -
+          split -b 1900M -d -a 2             release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso             release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-
+          rm release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso
+          sha256sum release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-* > release/parts.sha256
+          cat > release/JUNTAR-ISO-WINDOWS.bat <<'BAT'
+          @echo off
+          echo Montando NexHash EdgeOS 2.5...
+          copy /b NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-00+NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-01+NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-02 NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso
+          echo.
+          echo Pronto. ISO criada:
+          echo NexHash-EdgeOS-2.5-APPLIANCE-FINAL-Install-amd64.iso
+          pause
+          BAT
+          cat > release/LEIA-ME.txt <<'TXT'
+          NexHash EdgeOS 2.5 APPLIANCE FINAL
+
+          1. Baixe os 3 arquivos .part-00, .part-01 e .part-02.
+          2. Baixe JUNTAR-ISO-WINDOWS.bat para a mesma pasta.
+          3. Execute JUNTAR-ISO-WINDOWS.bat.
+          4. Grave a ISO resultante no Rufus.
+
+          SHA-256 da ISO final:
+          be73c9f132e7199344457cd4219f184fa933bab7e59c98b6bddbdd93bbde0e62
+          TXT
+          ls -lh release
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release delete v2.5-appliance-final --cleanup-tag -y 2>/dev/null || true
+          gh release create v2.5-appliance-final             --title "NexHash EdgeOS 2.5 APPLIANCE FINAL"             --notes "Validated appliance build. Download all three ISO parts plus JUNTAR-ISO-WINDOWS.bat, place them in the same folder, and run the BAT to reconstruct the ISO. Final ISO SHA-256: be73c9f132e7199344457cd4219f184fa933bab7e59c98b6bddbdd93bbde0e62"             release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-00             release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-01             release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-02             release/JUNTAR-ISO-WINDOWS.bat             release/LEIA-ME.txt             release/parts.sha256
