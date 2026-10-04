@@ -65,4 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release delete v2.5-appliance-final --cleanup-tag -y 2>/dev/null || true
-          gh release create v2.5-appliance-final             --title "NexHash EdgeOS 2.5 APPLIANCE FINAL"             --notes "Validated appliance build. Download both ISO parts plus JUNTAR-ISO-WINDOWS.bat, place them in the same folder, and run the BAT to reconstruct the ISO. Final ISO SHA-256: be73c9f132e7199344457cd4219f184fa933bab7e59c98b6bddbdd93bbde0e62"             release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-00             release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-01             release/NexHash-EdgeOS-2.5-APPLIANCE-FINAL.iso.part-02             release/JUNTAR-ISO-WINDOWS.bat             release/LEIA-ME.txt             release/parts.sha256
+          gh release create v2.5-appliance-final \
+            --title "NexHash EdgeOS 2.5 APPLIANCE FINAL" \
+            --notes "Validated appliance build. Download both ISO parts plus JUNTAR-ISO-WINDOWS.bat, place them in the same folder, and run the BAT to reconstruct the ISO. Final ISO SHA-256: be73c9f132e7199344457cd4219f184fa933bab7e59c98b6bddbdd93bbde0e62" \
+            release/*
